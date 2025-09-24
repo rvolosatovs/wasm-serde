@@ -1,0 +1,63 @@
+package rvolosatovs:serde@0.1.0;
+
+interface deserializer {
+    resource error {
+        to-string: func() -> string;
+    }
+
+    variant payload {
+        val-u8(u8),
+        val-s8(s8),
+        val-u16(u16),
+        val-s16(s16),
+        val-u32(u32),
+        val-s32(s32),
+        val-u64(u64),
+        val-s64(s64),
+        val-f32(f32),
+        val-f64(f64),
+        val-char(char),
+        val-string(string),
+        val-bytes(list<u8>),
+        val-none,
+        val-some,
+        val-ok,
+        val-err,
+        val-seq,
+        val-map,
+    }
+
+    resource deserializer {
+        from-list: static func(buf: list<u8>) -> deserializer;
+
+        deserialize-u8: func() -> result<payload, error>;
+        deserialize-s8: func() -> result<payload, error>;
+        deserialize-u16: func() -> result<payload, error>;
+        deserialize-s16: func() -> result<payload, error>;
+        deserialize-u32: func() -> result<payload, error>;
+        deserialize-s32: func() -> result<payload, error>;
+        deserialize-u64: func() -> result<payload, error>;
+        deserialize-s64: func() -> result<payload, error>;
+        deserialize-f32: func() -> result<payload, error>;
+        deserialize-f64: func() -> result<payload, error>;
+        deserialize-char: func() -> result<payload, error>;
+        deserialize-string: func() -> result<payload, error>;
+        deserialize-record: func(fields: list<string>) -> result<payload, error>;
+        deserialize-variant: func(cases: list<string>) -> result<payload, error>;
+        deserialize-list: func() -> result<payload, error>;
+        deserialize-tuple: func(n: u32) -> result<payload, error>;
+        deserialize-flags: func(cases: list<string>) -> result<payload, error>;
+        deserialize-enum: func(cases: list<string>) -> result<payload, error>;
+        deserialize-option: func() -> result<payload, error>;
+        deserialize-result: func(ok: bool, err: bool) -> result<payload, error>;
+
+        next-element: func() -> bool;
+
+        next-key: func() -> bool;
+        next-value: func() -> bool;
+    }
+}
+
+world format {
+    export deserializer;
+}
