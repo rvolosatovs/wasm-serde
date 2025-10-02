@@ -1,13 +1,10 @@
 [package]
-name = "wasm-serde"
+name = "app"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
 crate-type = ["cdylib"]
-
-[workspace]
-members = ["app"]
 
 [dependencies]
 serde_core = "1"
