@@ -43,6 +43,37 @@ impl From<serde_json::Error> for deserializer::Error {
     }
 }
 
+fn invalid_type(v: serde_json::Value, exp: &dyn de::Expected) -> deserializer::Error {
+    let err = match v {
+        serde_json::Value::Null => serde_json::Error::invalid_type(de::Unexpected::Unit, exp),
+        serde_json::Value::Bool(v) => serde_json::Error::invalid_type(de::Unexpected::Bool(v), exp),
+        serde_json::Value::Number(v) => {
+            if let Some(v) = v.as_u64() {
+                serde_json::Error::invalid_type(de::Unexpected::Unsigned(v), exp)
+            } else if let Some(v) = v.as_i64() {
+                serde_json::Error::invalid_type(de::Unexpected::Signed(v), exp)
+            } else if let Some(v) = v.as_f64() {
+                serde_json::Error::invalid_type(de::Unexpected::Float(v), exp)
+            } else if let Some(v) = v.as_u128() {
+                serde_json::Error::invalid_type(de::Unexpected::Other(&format!("{v} as u128")), exp)
+            } else if let Some(v) = v.as_i128() {
+                serde_json::Error::invalid_type(de::Unexpected::Other(&format!("{v} as i128")), exp)
+            } else {
+                serde_json::Error::invalid_type(
+                    de::Unexpected::Other(&format!("{v} as unclassified")),
+                    exp,
+                )
+            }
+        }
+        serde_json::Value::String(v) => {
+            serde_json::Error::invalid_type(de::Unexpected::Str(&v), exp)
+        }
+        serde_json::Value::Array(..) => serde_json::Error::invalid_type(de::Unexpected::Seq, exp),
+        serde_json::Value::Object(..) => serde_json::Error::invalid_type(de::Unexpected::Map, exp),
+    };
+    deserializer::Error::new(err)
+}
+
 enum Deserializer {
     Source(serde_json::Deserializer<IoRead<Cursor<Vec<u8>>>>),
     Value(serde_json::Value),
@@ -94,6 +125,13 @@ impl deserializer::GuestDeserializer for Deserializer {
         deserializer::Deserializer::new(Deserializer::Source(
             serde_json::Deserializer::from_reader(Cursor::new(buf)),
         ))
+    }
+
+    fn deserialize_bool(this: deserializer::Deserializer) -> Result<bool, deserializer::Error> {
+        this.into_inner::<Self>()
+            .deserialize_value(BoolVisitor, |mut src, visitor| {
+                src.deserialize_bool(visitor)
+            })
     }
 
     fn deserialize_u8(this: deserializer::Deserializer) -> Result<u8, deserializer::Error> {
@@ -190,47 +228,6 @@ impl deserializer::GuestDeserializer for Deserializer {
                     }),
                 ))
             }
-            Self::Value(serde_json::Value::Null) => Err(deserializer::Error::new(
-                serde_json::Error::invalid_type(de::Unexpected::Unit, &RecordVisitor(fields)),
-            )),
-            Self::Value(serde_json::Value::Bool(v)) => Err(deserializer::Error::new(
-                serde_json::Error::invalid_type(de::Unexpected::Bool(v), &RecordVisitor(fields)),
-            )),
-            Self::Value(serde_json::Value::Number(v)) => {
-                if let Some(v) = v.as_u64() {
-                    Err(deserializer::Error::new(serde_json::Error::invalid_type(
-                        de::Unexpected::Unsigned(v),
-                        &RecordVisitor(fields),
-                    )))
-                } else if let Some(v) = v.as_i64() {
-                    Err(deserializer::Error::new(serde_json::Error::invalid_type(
-                        de::Unexpected::Signed(v),
-                        &RecordVisitor(fields),
-                    )))
-                } else if let Some(v) = v.as_f64() {
-                    Err(deserializer::Error::new(serde_json::Error::invalid_type(
-                        de::Unexpected::Float(v),
-                        &RecordVisitor(fields),
-                    )))
-                } else if let Some(v) = v.as_u128() {
-                    Err(deserializer::Error::new(serde_json::Error::invalid_type(
-                        de::Unexpected::Other(&format!("{v} as u128")),
-                        &RecordVisitor(fields),
-                    )))
-                } else if let Some(v) = v.as_i128() {
-                    Err(deserializer::Error::new(serde_json::Error::invalid_type(
-                        de::Unexpected::Other(&format!("{v} as i128")),
-                        &RecordVisitor(fields),
-                    )))
-                } else {
-                    Err(deserializer::Error::new(serde_json::Error::custom(
-                        "failed to classify number",
-                    )))
-                }
-            }
-            Self::Value(serde_json::Value::String(v)) => Err(deserializer::Error::new(
-                serde_json::Error::invalid_type(de::Unexpected::Str(&v), &RecordVisitor(fields)),
-            )),
             Self::Value(serde_json::Value::Array(mut vs)) => {
                 if vs.len() != fields.len() {
                     return Err(deserializer::Error::new(serde_json::Error::custom(
@@ -278,6 +275,7 @@ impl deserializer::GuestDeserializer for Deserializer {
                     }),
                 ))
             }
+            Self::Value(v) => Err(invalid_type(v, &RecordVisitor(fields))),
         }
     }
 
@@ -291,7 +289,15 @@ impl deserializer::GuestDeserializer for Deserializer {
     fn deserialize_list(
         this: deserializer::Deserializer,
     ) -> Result<ListDeserializer, deserializer::Error> {
-        todo!()
+        match this.into_inner::<Self>() {
+            Self::Source(_src) => {
+                todo!()
+            }
+            Self::Value(serde_json::Value::Array(_vs)) => {
+                todo!()
+            }
+            Self::Value(v) => Err(invalid_type(v, todo!())),
+        }
     }
 
     fn deserialize_tuple(
@@ -299,7 +305,35 @@ impl deserializer::GuestDeserializer for Deserializer {
         n: u32,
     ) -> Result<(deserializer::Deserializer, deserializer::TupleDeserializer), deserializer::Error>
     {
-        todo!()
+        let n = n as _;
+        match this.into_inner::<Self>() {
+            Self::Source(mut src) => {
+                let mut vs = src.deserialize_tuple(n, TupleVisitor(n))?;
+                let v = vs.pop().ok_or_else(|| {
+                    deserializer::Error::new(serde_json::Error::custom("no elements found"))
+                })?;
+                Ok((
+                    deserializer::Deserializer::new(Deserializer::Value(v)),
+                    deserializer::TupleDeserializer::new(TupleDeserializer(vs)),
+                ))
+            }
+            Self::Value(serde_json::Value::Array(mut vs)) => {
+                if vs.len() != n {
+                    return Err(deserializer::Error::new(serde_json::Error::custom(
+                        format!("expected {n} elements, got {}", vs.len()),
+                    )));
+                }
+                vs.reverse();
+                let v = vs.pop().ok_or_else(|| {
+                    deserializer::Error::new(serde_json::Error::custom("no fields found"))
+                })?;
+                Ok((
+                    deserializer::Deserializer::new(Deserializer::Value(v)),
+                    deserializer::TupleDeserializer::new(TupleDeserializer(vs)),
+                ))
+            }
+            Self::Value(v) => Err(invalid_type(v, &TupleVisitor(n))),
+        }
     }
 
     fn deserialize_flags(
@@ -371,13 +405,18 @@ impl GuestRecordDeserializer for RecordDeserializer {
     }
 }
 
-struct TupleDeserializer;
+struct TupleDeserializer(Vec<serde_json::Value>);
 
 impl GuestTupleDeserializer for TupleDeserializer {
     fn next(
-        _this: deserializer::TupleDeserializer,
+        this: deserializer::TupleDeserializer,
     ) -> (deserializer::Deserializer, deserializer::TupleDeserializer) {
-        todo!()
+        let mut this = this.into_inner::<Self>();
+        let v = this.0.pop().expect("no fields left to iterate");
+        (
+            deserializer::Deserializer::new(Deserializer::Value(v)),
+            deserializer::TupleDeserializer::new(this),
+        )
     }
 }
 
@@ -404,6 +443,23 @@ impl GuestUnsizedListDeserializer for UnsizedListDeserializer {
         deserializer::UnsizedListDeserializer,
     )> {
         todo!()
+    }
+}
+
+pub struct BoolVisitor;
+
+impl<'de> de::Visitor<'de> for BoolVisitor {
+    type Value = bool;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a bool")
+    }
+
+    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(v)
     }
 }
 
@@ -466,6 +522,30 @@ impl<'de> de::Visitor<'de> for StringVisitor {
         E: de::Error,
     {
         Ok(v)
+    }
+}
+
+struct TupleVisitor(usize);
+
+impl<'de> de::Visitor<'de> for TupleVisitor {
+    type Value = Vec<serde_json::Value>;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "a tuple with {:?} elements", self.0)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: de::SeqAccess<'de>,
+    {
+        let mut values = Vec::with_capacity(self.0);
+        while let Some(v) = seq.next_element()? {
+            values.push(v)
+        }
+        if values.len() != self.0 {
+            return Err(A::Error::invalid_length(values.len(), &self));
+        }
+        Ok(values)
     }
 }
 
