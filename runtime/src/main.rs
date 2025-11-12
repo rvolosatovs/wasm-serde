@@ -2,47 +2,111 @@ mod bindings {
     wasmtime::component::bindgen!();
 }
 
-use core::iter::zip;
 use core::mem;
 
-use anyhow::{Context as _, anyhow};
-use wasmtime::component::types::Field;
-use wasmtime::component::{Component, Linker, ResourceAny, Type, Val, types};
-use wasmtime::{Engine, Store};
+use anyhow::{Context as _, anyhow, bail, ensure};
+use wasmtime::component::types::{self, Field};
+use wasmtime::component::{Component, Func, Instance, Linker, ResourceAny, Type, Val};
+use wasmtime::{AsContextMut, Engine, Store};
 use wit_component::ComponentEncoder;
 
-use bindings::exports::rvolosatovs::serde::deserializer::Guest;
+use bindings::exports::rvolosatovs::serde::deserializer;
 
-pub struct Error;
+fn try_flatten_result<T>(
+    store: impl AsContextMut,
+    instance: &deserializer::Guest,
+    res: wasmtime::Result<T, deserializer::Error>,
+) -> wasmtime::Result<T> {
+    match res {
+        Ok(v) => Ok(v),
+        Err(err) => {
+            let err = instance.error().call_to_string(store, err)?;
+            Err(anyhow!(err))
+        }
+    }
+}
+
+fn mk_flatten_result<T>(
+    store: impl AsContextMut,
+    instance: &deserializer::Guest,
+) -> impl FnOnce(wasmtime::Result<T, deserializer::Error>) -> wasmtime::Result<T> {
+    |res| try_flatten_result(store, instance, res)
+}
 
 fn deserialize(
     store: &mut Store<()>,
     de: ResourceAny,
-    instance: &Guest,
+    instance: &deserializer::Guest,
     ty: Type,
     v: &mut Val,
 ) -> wasmtime::Result<()> {
-    #[expect(unused, reason = "incomplete")]
-    match ty {
-        Type::Bool => todo!(),
-        Type::S8 => todo!(),
-        Type::U8 => todo!(),
-        Type::S16 => todo!(),
-        Type::U16 => todo!(),
-        Type::S32 => todo!(),
-        Type::U32 => todo!(),
-        Type::S64 => todo!(),
-        Type::U64 => todo!(),
-        Type::Float32 => todo!(),
-        Type::Float64 => todo!(),
-        Type::Char => todo!(),
-        Type::String => match instance.deserializer().call_deserialize_string(store, de)? {
-            Ok(s) => {
-                *v = Val::String(s);
-                Ok(())
-            }
-            Err(_) => todo!(),
-        },
+    let de = match ty {
+        Type::Bool => instance
+            .deserializer()
+            .call_deserialize_bool(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::Bool)?,
+        Type::S8 => instance
+            .deserializer()
+            .call_deserialize_s8(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::S8)?,
+        Type::U8 => instance
+            .deserializer()
+            .call_deserialize_u8(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::U8)?,
+        Type::S16 => instance
+            .deserializer()
+            .call_deserialize_s16(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::S16)?,
+        Type::U16 => instance
+            .deserializer()
+            .call_deserialize_u16(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::U16)?,
+        Type::S32 => instance
+            .deserializer()
+            .call_deserialize_s32(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::S32)?,
+        Type::U32 => instance
+            .deserializer()
+            .call_deserialize_u32(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::U32)?,
+        Type::S64 => instance
+            .deserializer()
+            .call_deserialize_s64(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::S64)?,
+        Type::U64 => instance
+            .deserializer()
+            .call_deserialize_u64(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::U64)?,
+        Type::Float32 => instance
+            .deserializer()
+            .call_deserialize_f32(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::Float32)?,
+        Type::Float64 => instance
+            .deserializer()
+            .call_deserialize_f64(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::Float64)?,
+        Type::Char => instance
+            .deserializer()
+            .call_deserialize_char(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::Char)?,
+        Type::String => instance
+            .deserializer()
+            .call_deserialize_string(&mut *store, de)
+            .and_then(mk_flatten_result(store, instance))
+            .map(Val::String)?,
+        #[expect(unused, reason = "incomplete")]
         Type::List(ty) => todo!(),
         Type::Record(ty) => {
             let mut names = ty
@@ -50,76 +114,191 @@ fn deserialize(
                 .map(|Field { name, .. }| name.into())
                 .collect::<Vec<_>>();
             let tys = ty.fields().map(|Field { ty, .. }| ty).collect::<Vec<_>>();
-            match instance
+            let (mut idx, mut de, mut iter) = instance
                 .deserializer()
-                .call_deserialize_record(&mut *store, de, &names)?
-            {
-                Ok((mut idx, mut de, mut iter)) => {
-                    let num_fields = ty.fields().len();
-                    let mut vs = Vec::with_capacity(num_fields);
-                    let mut fv = Val::Bool(false);
-                    deserialize(
-                        &mut *store,
-                        de,
-                        instance,
-                        tys[idx as usize].clone(),
-                        &mut fv,
-                    )
-                    .with_context(|| {
-                        format!("failed to deserialize record field with index `{idx}`")
-                    })?;
-                    vs.push((idx, fv));
-                    for _ in 1..num_fields {
-                        let next = instance
-                            .record_deserializer()
-                            .call_next(&mut *store, iter)
-                            .context("failed to call `next`")?;
-                        idx = next.0;
-                        de = next.1;
-                        iter = next.2;
-                        let mut fv = Val::Bool(false);
-                        deserialize(
-                            &mut *store,
-                            de,
-                            instance,
-                            tys[idx as usize].clone(),
-                            &mut fv,
-                        )
-                        .with_context(|| {
-                            format!("failed to deserialize record field with index `{idx}`")
-                        })?;
-                        vs.push((idx, fv));
-                    }
-                    vs.sort_unstable_by(|(l, ..), (r, ..)| l.cmp(r));
-                    let vs = vs
-                        .into_iter()
-                        .map(|(idx, v)| (mem::take(&mut names[idx as usize]), v))
-                        .collect();
-                    *v = Val::Record(vs);
-                    Ok(())
-                }
-                Err(err) => {
-                    let err = instance.error().call_to_string(store, err)?;
-                    Err(anyhow!(err))
-                }
+                .call_deserialize_record(&mut *store, de, &names)
+                .and_then(mk_flatten_result(&mut *store, instance))?;
+            let num_fields = ty.fields().len();
+            let mut vs = Vec::with_capacity(num_fields);
+            let mut fv = Val::Bool(false);
+            deserialize(
+                &mut *store,
+                de,
+                instance,
+                tys[idx as usize].clone(),
+                &mut fv,
+            )
+            .with_context(|| format!("failed to deserialize record field with index `{idx}`"))?;
+            vs.push((idx, fv));
+            for _ in 1..num_fields {
+                let next = instance
+                    .record_deserializer()
+                    .call_next(&mut *store, iter)
+                    .context("failed to call `next`")?;
+                idx = next.0;
+                de = next.1;
+                iter = next.2;
+                let mut fv = Val::Bool(false);
+                deserialize(
+                    &mut *store,
+                    de,
+                    instance,
+                    tys[idx as usize].clone(),
+                    &mut fv,
+                )
+                .with_context(|| {
+                    format!("failed to deserialize record field with index `{idx}`")
+                })?;
+                vs.push((idx, fv));
             }
+            vs.sort_unstable_by(|(l, ..), (r, ..)| l.cmp(r));
+            let vs = vs
+                .into_iter()
+                .map(|(idx, v)| (mem::take(&mut names[idx as usize]), v))
+                .collect();
+            Val::Record(vs)
         }
-        Type::Tuple(ty) => todo!(),
+        Type::Tuple(ty) => {
+            let mut tys = ty.types();
+            let num_elements = tys.len();
+            let (mut de, mut iter) = instance
+                .deserializer()
+                .call_deserialize_tuple(&mut *store, de, num_elements as _)
+                .and_then(mk_flatten_result(&mut *store, instance))?;
+            let mut vs = Vec::with_capacity(num_elements);
+            let mut ev = Val::Bool(false);
+            let ty = tys
+                .next()
+                .context("failed to get first tuple element type")?;
+            deserialize(&mut *store, de, instance, ty, &mut ev)
+                .context("failed to deserialize first tuple element")?;
+            vs.push(ev);
+            for ty in tys {
+                let next = instance
+                    .tuple_deserializer()
+                    .call_next(&mut *store, iter)
+                    .context("failed to call `next`")?;
+                de = next.0;
+                iter = next.1;
+                let mut ev = Val::Bool(false);
+                deserialize(&mut *store, de, instance, ty, &mut ev)
+                    .context("failed to deserialize tuple element")?;
+                vs.push(ev);
+            }
+            Val::Tuple(vs)
+        }
+        #[expect(unused, reason = "incomplete")]
         Type::Variant(ty) => todo!(),
+        #[expect(unused, reason = "incomplete")]
         Type::Enum(ty) => todo!(),
+        #[expect(unused, reason = "incomplete")]
         Type::Option(ty) => todo!(),
+        #[expect(unused, reason = "incomplete")]
         Type::Result(ty) => todo!(),
+        #[expect(unused, reason = "incomplete")]
         Type::Flags(ty) => todo!(),
+        #[expect(unused, reason = "incomplete")]
         Type::Own(ty) => todo!(),
+        #[expect(unused, reason = "incomplete")]
         Type::Borrow(ty) => todo!(),
+        #[expect(unused, reason = "incomplete")]
         Type::Future(ty) => todo!(),
+        #[expect(unused, reason = "incomplete")]
         Type::Stream(ty) => todo!(),
         Type::ErrorContext => todo!(),
+    };
+    *v = de;
+    Ok(())
+}
+
+fn deserialize_params(
+    store: &mut Store<()>,
+    instance: &deserializer::Guest,
+    ty: &types::ComponentFunc,
+    payload: impl AsRef<[u8]>,
+) -> wasmtime::Result<Vec<Val>> {
+    let payload = payload.as_ref();
+    let mut tys = ty.params();
+    let num_params = tys.len();
+    if num_params == 0 {
+        ensure!(payload.is_empty());
+        return Ok(Vec::default());
+    }
+    let de = instance
+        .deserializer()
+        .call_from_list(&mut *store, payload.as_ref())?;
+
+    let (mut de, mut iter) = instance
+        .deserializer()
+        .call_deserialize_tuple(&mut *store, de, num_params as _)
+        .and_then(mk_flatten_result(&mut *store, instance))?;
+    let mut vs = Vec::with_capacity(num_params);
+
+    let mut pv = Val::Bool(false);
+    let (name, ty) = tys.next().context("failed to get first parameter type")?;
+    deserialize(&mut *store, de, instance, ty, &mut pv)
+        .with_context(|| format!("failed to deserialize param `{name}`"))?;
+    vs.push(pv);
+    for (name, ty) in tys {
+        let next = instance
+            .tuple_deserializer()
+            .call_next(&mut *store, iter)
+            .context("failed to call `next`")?;
+        de = next.0;
+        iter = next.1;
+        let mut pv = Val::Bool(false);
+        deserialize(&mut *store, de, instance, ty, &mut pv)
+            .with_context(|| format!("failed to deserialize param `{name}`"))?;
+        vs.push(pv);
+    }
+    Ok(vs)
+}
+
+fn get_func(
+    engine: &Engine,
+    mut store: impl AsContextMut,
+    instance: Instance,
+    ty: &types::Component,
+    name: &str,
+) -> wasmtime::Result<(Func, types::ComponentFunc)> {
+    if let Some((instance_name, name)) = name.split_once('#') {
+        let Some(types::ComponentItem::ComponentInstance(ty)) =
+            ty.get_export(engine, instance_name)
+        else {
+            bail!("instance not found")
+        };
+        let (_, instance_idx) = instance
+            .get_export(&mut store, None, instance_name)
+            .context("instance not found")?;
+
+        let Some(types::ComponentItem::ComponentFunc(ty)) = ty.get_export(engine, name) else {
+            bail!("function not found")
+        };
+        let func_idx = instance
+            .get_export_index(&mut store, Some(&instance_idx), name)
+            .context("function index not found")?;
+        let func = instance
+            .get_func(&mut store, func_idx)
+            .context("function not found")?;
+        Ok((func, ty))
+    } else {
+        let Some(types::ComponentItem::ComponentFunc(ty)) = ty.get_export(engine, name) else {
+            bail!("function not found")
+        };
+        let func = instance
+            .get_func(&mut store, name)
+            .context("function not found")?;
+        Ok((func, ty))
     }
 }
 
 fn main() -> wasmtime::Result<()> {
-    let pld = std::env::args().skip(1).next().context("payload missing")?;
+    let mut args = std::env::args();
+    let (func, payload) = match (args.next(), args.next(), args.next(), args.next()) {
+        (_, Some(func), Some(payload), None) => (func, payload),
+        (Some(exe), ..) => bail!("invalid arguments, usage: {exe} FUNC PAYLOAD"),
+        _ => bail!("invalid arguments, usage: FUNC PAYLOAD"),
+    };
 
     let engine = Engine::default();
 
@@ -143,50 +322,31 @@ fn main() -> wasmtime::Result<()> {
     let codec = bindings::Format::instantiate(&mut codec_store, &codec, &linker)?;
     let codec = codec.rvolosatovs_serde_deserializer();
 
-    let de = codec
-        .deserializer()
-        .call_from_list(&mut codec_store, pld.as_bytes())?;
-    for (name, ty) in app_ty.exports(&engine) {
-        match ty {
-            types::ComponentItem::ComponentFunc(ty) => {
-                let f = app
-                    .get_func(&mut app_store, name)
-                    .expect("export not found");
-                let mut params = vec![Val::Bool(false); ty.params().len()];
-                for ((_, ty), v) in zip(f.params(&app_store), &mut params) {
-                    deserialize(&mut codec_store, de, codec, ty, v)
-                        .context("failed to deserialize param")?;
+    let (f, ty) = get_func(&engine, &mut app_store, app, &app_ty, &func).map_err(|err| {
+        eprintln!("exported function `{func}` not found, perhaps you meant one of:");
+        for (name, ty) in app_ty.exports(&engine) {
+            match ty {
+                types::ComponentItem::ComponentFunc(..) => {
+                    eprintln!("\t{name}");
                 }
-                let mut results = vec![Val::Bool(false); ty.results().len()];
-                f.call(&mut app_store, &params, &mut results)
-                    .context("failed to call function")?;
-                eprintln!("{name}: {results:?}");
-            }
-            types::ComponentItem::ComponentInstance(ty) => {
-                let (_, instance) = app
-                    .get_export(&mut app_store, None, name)
-                    .expect("instance export not found");
-                for (name, ty) in ty.exports(&engine) {
-                    let types::ComponentItem::ComponentFunc(ty) = ty else {
-                        continue;
-                    };
-                    let (_, idx) = app
-                        .get_export(&mut app_store, Some(&instance), name)
-                        .expect("instance export not found");
-                    let f = app.get_func(&mut app_store, idx).expect("export not found");
-                    let mut params = vec![Val::Bool(false); ty.params().len()];
-                    for ((_, ty), v) in zip(f.params(&app_store), &mut params) {
-                        deserialize(&mut codec_store, de, codec, ty, v)
-                            .context("failed to deserialize param")?;
+                types::ComponentItem::ComponentInstance(ty) => {
+                    for (fname, ty) in ty.exports(&engine) {
+                        let types::ComponentItem::ComponentFunc(..) = ty else {
+                            continue;
+                        };
+                        eprintln!("\t{name}#{fname}");
                     }
-                    let mut results = vec![Val::Bool(false); ty.results().len()];
-                    f.call(&mut app_store, &params, &mut results)
-                        .context("failed to call function")?;
-                    eprintln!("{name}: {results:?}");
                 }
+                _ => continue,
             }
-            _ => continue,
         }
-    }
+        err
+    })?;
+
+    let params = deserialize_params(&mut codec_store, codec, &ty, payload)?;
+    let mut results = vec![Val::Bool(false); ty.results().len()];
+    f.call(&mut app_store, &params, &mut results)
+        .context("failed to call function")?;
+    println!("{results:?}");
     Ok(())
 }
