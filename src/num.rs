@@ -685,6 +685,13 @@ impl<'de> de::Visitor<'de> for F32Visitor {
     {
         Ok(v.into())
     }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(v as _)
+    }
 }
 
 pub struct F64Visitor;

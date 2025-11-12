@@ -3,13 +3,11 @@ name = "wasm-serde"
 version = "0.1.0"
 edition = "2024"
 
-[lib]
-crate-type = ["cdylib"]
-
-[workspace]
-members = ["app"]
-
 [dependencies]
 serde_core = "1"
-serde_json = "1"
 wit-bindgen = "0.46"
+
+[dev-dependencies]
+anyhow = "1"
+wasmtime = "38"
+wit-component = "0.239"

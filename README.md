@@ -1,4 +1,5 @@
 ```
-cargo build --target wasm32-unknown-unknown --release --workspace
-cargo run --manifest-path ./runtime/Cargo.toml 'myapp:app/custom@0.1.0#foo' '[{"foo":"myfoo","bar":"mybar"}]'
+cargo build --manifest-path ./json/Cargo.toml --target wasm32-unknown-unknown --release
+cargo build --manifest-path ./examples/app/Cargo.toml --target wasm32-unknown-unknown --release
+cargo run --manifest-path ./examples/runtime/Cargo.toml 'myapp:app/custom@0.1.0#foo' '[{"foo":"myfoo","bar":"mybar"}]'
 ```

@@ -7,5 +7,3 @@ edition = "2024"
 anyhow = "1"
 wasmtime = "38"
 wit-component = "0.239"
-
-[workspace]

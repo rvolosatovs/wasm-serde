@@ -1,5 +1,3 @@
-use crate::Component;
-
-wit_bindgen::generate!();
-
-export!(Component);
+wit_bindgen::generate!({
+    pub_export_macro: true,
+});
