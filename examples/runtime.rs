@@ -303,7 +303,7 @@ fn main() -> wasmtime::Result<()> {
     let engine = Engine::default();
 
     let mut app = ComponentEncoder::default().module(include_bytes!(
-        "../../app/target/wasm32-unknown-unknown/release/app.wasm"
+        "./app/target/wasm32-unknown-unknown/release/app.wasm"
     ))?;
     let app = app.encode()?;
     let app = Component::new(&engine, app)?;
@@ -313,7 +313,7 @@ fn main() -> wasmtime::Result<()> {
     let app = linker.instantiate(&mut app_store, &app)?;
 
     let mut codec = ComponentEncoder::default().module(include_bytes!(
-        "../../../json/target/wasm32-unknown-unknown/release/wasm_serde_json.wasm"
+        "../json/target/wasm32-unknown-unknown/release/wasm_serde_json.wasm"
     ))?;
     let codec = codec.encode()?;
     let codec = Component::new(&engine, codec)?;
