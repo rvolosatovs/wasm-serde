@@ -210,10 +210,30 @@ impl Iterator for ListIter<'_> {
     }
 }
 
+struct TupleIter<'a> {
+    store: &'a mut Store<()>,
+    codec: &'a bindings::exports::rvolosatovs::serde::deserializer::Guest,
+    de: ResourceAny,
+}
+
+impl Iterator for TupleIter<'_> {
+    type Item = ResourceAny;
+
+    #[track_caller]
+    fn next(&mut self) -> Option<Self::Item> {
+        let (de, next) = self
+            .codec
+            .tuple_deserializer()
+            .call_next(&mut self.store, self.de)
+            .unwrap();
+        self.de = next;
+        Some(de)
+    }
+}
+
 #[test]
 fn record_0() {
-    const PAYLOAD: &str = r#"{"a": 42, "b": [0, 1, 2, 3, -4, -5, -6, -7, 8.1, 9.2], "c": "test", "d": {"d_a": "bytes"}}"#;
-
+    const PAYLOAD: &str = r#"{"a": 42, "b": [0, 1, 2, 3, -4, -5, -6, -7, 8.1, 9.2], "c": "test", "d": {"d_a": "bytes", "d_b": ["foo", "bar", "baz"]}}"#;
     with_deserializer(PAYLOAD, |mut store, codec, de| {
         let (idx, de, fields) = codec
             .deserializer()
@@ -240,94 +260,92 @@ fn record_0() {
 
         let (idx, de) = fields.next().unwrap();
         assert_eq!(idx, 1);
-        let de = codec
+        let (de, els) = codec
             .deserializer()
-            .call_deserialize_list(&mut fields.store, de)
+            .call_deserialize_tuple(&mut fields.store, de, 10)
             .unwrap()
             .unwrap();
-
-        let mut bar_els = ListIter {
-            store: &mut fields.store,
-            codec,
-            de,
-        };
-
-        let de = bar_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_u8(&mut bar_els.store, de)
+            .call_deserialize_u8(&mut fields.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, 0);
 
-        let de = bar_els.next().unwrap();
+        let mut b_els = TupleIter {
+            store: &mut fields.store,
+            codec,
+            de: els,
+        };
+
+        let de = b_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_u16(&mut bar_els.store, de)
+            .call_deserialize_u16(&mut b_els.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, 1);
 
-        let de = bar_els.next().unwrap();
+        let de = b_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_u32(&mut bar_els.store, de)
+            .call_deserialize_u32(&mut b_els.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, 2);
 
-        let de = bar_els.next().unwrap();
+        let de = b_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_u64(&mut bar_els.store, de)
+            .call_deserialize_u64(&mut b_els.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, 3);
 
-        let de = bar_els.next().unwrap();
+        let de = b_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_s8(&mut bar_els.store, de)
+            .call_deserialize_s8(&mut b_els.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, -4);
 
-        let de = bar_els.next().unwrap();
+        let de = b_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_s16(&mut bar_els.store, de)
+            .call_deserialize_s16(&mut b_els.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, -5);
 
-        let de = bar_els.next().unwrap();
+        let de = b_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_s32(&mut bar_els.store, de)
+            .call_deserialize_s32(&mut b_els.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, -6);
 
-        let de = bar_els.next().unwrap();
+        let de = b_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_s64(&mut bar_els.store, de)
+            .call_deserialize_s64(&mut b_els.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, -7);
 
-        let de = bar_els.next().unwrap();
+        let de = b_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_f32(&mut bar_els.store, de)
+            .call_deserialize_f32(&mut b_els.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, 8.1);
 
-        let de = bar_els.next().unwrap();
+        let de = b_els.next().unwrap();
         let v = codec
             .deserializer()
-            .call_deserialize_f64(&mut bar_els.store, de)
+            .call_deserialize_f64(&mut b_els.store, de)
             .unwrap()
             .unwrap();
         assert_eq!(v, 9.2);
@@ -344,9 +362,9 @@ fn record_0() {
         let (idx, de) = fields.next().unwrap();
         assert_eq!(idx, 3);
 
-        let (idx, de, _fields) = codec
+        let (idx, de, d_fields) = codec
             .deserializer()
-            .call_deserialize_record(&mut fields.store, de, &["d_a".into()])
+            .call_deserialize_record(&mut fields.store, de, &["d_a".into(), "d_b".into()])
             .unwrap()
             .unwrap();
         assert_eq!(idx, 0);
@@ -356,6 +374,48 @@ fn record_0() {
             .unwrap()
             .unwrap();
         assert_eq!(v, b"bytes");
+
+        let mut d_fields = RecordIter {
+            store: &mut fields.store,
+            codec,
+            de: d_fields,
+        };
+        let (idx, de) = d_fields.next().unwrap();
+        assert_eq!(idx, 1);
+        let de = codec
+            .deserializer()
+            .call_deserialize_list(&mut fields.store, de)
+            .unwrap()
+            .unwrap();
+        let mut d_b_els = ListIter {
+            store: &mut fields.store,
+            codec,
+            de,
+        };
+
+        let de = d_b_els.next().unwrap();
+        let v = codec
+            .deserializer()
+            .call_deserialize_string(&mut d_b_els.store, de)
+            .unwrap()
+            .unwrap();
+        assert_eq!(v, "foo");
+
+        let de = d_b_els.next().unwrap();
+        let v = codec
+            .deserializer()
+            .call_deserialize_string(&mut d_b_els.store, de)
+            .unwrap()
+            .unwrap();
+        assert_eq!(v, "bar");
+
+        let de = d_b_els.next().unwrap();
+        let v = codec
+            .deserializer()
+            .call_deserialize_string(&mut d_b_els.store, de)
+            .unwrap()
+            .unwrap();
+        assert_eq!(v, "baz");
     })
 }
 
