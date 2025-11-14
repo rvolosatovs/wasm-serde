@@ -51,6 +51,25 @@ impl<'de> de::Visitor<'de> for CharVisitor {
     {
         v.try_into().map_err(E::custom)
     }
+
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let v = u32::try_from(v).map_err(E::custom)?;
+        v.try_into().map_err(E::custom)
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let mut cs = v.chars();
+        match (cs.next(), cs.next()) {
+            (Some(c), None) => Ok(c),
+            _ => Err(E::custom("string does not represent a character")),
+        }
+    }
 }
 
 pub struct BytesVisitor;
