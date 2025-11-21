@@ -1,6 +1,68 @@
 package rvolosatovs:serde@0.1.0;
 
+interface reflect {
+    resource record-type {
+        constructor(fields: list<tuple<string, %type>>);
+    }
+
+    resource variant-type {
+        constructor(cases: list<tuple<string, option<%type>>>);
+    }
+
+    resource list-type {
+        constructor(%type: %type);
+    }
+
+    resource tuple-type {
+        constructor(types: list<%type>);
+    }
+
+    resource flags-type {
+        constructor(cases: list<string>);
+    }
+
+    resource enum-type {
+        constructor(cases: list<string>);
+    }
+
+    resource option-type {
+        constructor(%type: %type);
+    }
+
+    resource result-type {
+        constructor(ok: option<%type>, err: option<%type>);
+    }
+
+    variant %type {
+        %bool,
+        %u8,
+        %s8,
+        %u16,
+        %s16,
+        %u32,
+        %s32,
+        %u64,
+        %s64,
+        %f32,
+        %f64,
+        %char,
+        bytes,
+        %string,
+        %record(borrow<record-type>),
+        %variant(borrow<variant-type>),
+        %list(borrow<list-type>),
+        %tuple(borrow<tuple-type>),
+        %flags(borrow<flags-type>),
+        %enum(borrow<enum-type>),
+        %option(borrow<option-type>),
+        %result(borrow<result-type>),
+    }
+}
+
+
 interface deserializer {
+    use reflect.{record-type, variant-type, list-type, tuple-type, flags-type, enum-type, option-type, result-type, %type};
+
     resource error {
         to-string: func() -> string;
     }
@@ -34,17 +96,18 @@ interface deserializer {
         deserialize-char: static func(this: deserializer) -> result<char, error>;
         deserialize-bytes: static func(this: deserializer) -> result<list<u8>, error>;
         deserialize-string: static func(this: deserializer) -> result<string, error>;
-        deserialize-record: static func(this: deserializer, fields: list<string>) -> result<tuple<u32, deserializer, record-deserializer>, error>;
-        deserialize-variant: static func(this: deserializer, cases: list<tuple<string, bool>>) -> result<tuple<u32, deserializer>, error>;
-        deserialize-list: static func(this: deserializer) -> result<list-deserializer, error>;
-        deserialize-tuple: static func(this: deserializer, n: u32) -> result<tuple<deserializer, tuple-deserializer>, error>;
-        deserialize-flags: static func(this: deserializer, cases: list<string>) -> result<u32, error>;
-        deserialize-enum: static func(this: deserializer, cases: list<string>) -> result<u32, error>;
-        deserialize-option: static func(this: deserializer) -> result<option<deserializer>, error>;
-        deserialize-result: static func(this: deserializer, ok: bool, err: bool) -> result<result<deserializer, deserializer>, error>;
+        deserialize-record: static func(this: deserializer, %type: borrow<record-type>) -> result<tuple<u32, deserializer, record-deserializer>, error>;
+        deserialize-variant: static func(this: deserializer, %type: borrow<variant-type>) -> result<tuple<u32, deserializer>, error>;
+        deserialize-list: static func(this: deserializer, %type: %type) -> result<list-deserializer, error>;
+        deserialize-tuple: static func(this: deserializer, %type: borrow<tuple-type>) -> result<tuple<deserializer, tuple-deserializer>, error>;
+        deserialize-flags: static func(this: deserializer, %type: borrow<flags-type>) -> result<u32, error>;
+        deserialize-enum: static func(this: deserializer, %type: borrow<enum-type>) -> result<u32, error>;
+        deserialize-option: static func(this: deserializer, %type: %type) -> result<option<deserializer>, error>;
+        deserialize-result: static func(this: deserializer, ok: option<%type>, err: option<%type>) -> result<result<deserializer, deserializer>, error>;
     }
 }
 
 world format {
+    export reflect;
     export deserializer;
 }

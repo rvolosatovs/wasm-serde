@@ -1,9 +1,11 @@
 use core::fmt;
 use core::iter::zip;
+use core::ops::Deref;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::rc::Rc;
 
 use serde::de;
 use serde::de::value::{MapDeserializer, SeqDeserializer};
@@ -11,12 +13,212 @@ use serde::de::{Error as _, VariantAccess as _};
 use serde::{Deserialize, Deserializer as _};
 use serde_json::de::IoRead;
 use wasm_serde::bindings::exports::rvolosatovs::serde::deserializer::{
-    self, GuestListDeserializer, GuestRecordDeserializer, GuestTupleDeserializer,
+    GuestListDeserializer, GuestRecordDeserializer, GuestTupleDeserializer,
 };
+use wasm_serde::bindings::exports::rvolosatovs::serde::reflect::{
+    EnumTypeBorrow, FlagsTypeBorrow, GuestEnumType, GuestFlagsType, GuestListType, GuestOptionType,
+    GuestRecordType, GuestResultType, GuestTupleType, GuestVariantType, RecordTypeBorrow,
+    TupleTypeBorrow, VariantTypeBorrow,
+};
+use wasm_serde::bindings::exports::rvolosatovs::serde::{deserializer, reflect};
 
 struct Component;
 
 wasm_serde::bindings::export!(Component with_types_in wasm_serde::bindings);
+
+impl reflect::Guest for Component {
+    type RecordType = RecordType;
+    type VariantType = VariantType;
+    type ListType = ListType;
+    type TupleType = TupleType;
+    type FlagsType = FlagsType;
+    type EnumType = EnumType;
+    type OptionType = OptionType;
+    type ResultType = ResultType;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum Type {
+    Bool,
+    S8,
+    U8,
+    S16,
+    U16,
+    S32,
+    U32,
+    S64,
+    U64,
+    F32,
+    F64,
+    Char,
+    Bytes,
+    String,
+    Record(RecordType),
+    Variant(VariantType),
+    List(Box<ListType>),
+    Tuple(TupleType),
+    Flags(FlagsType),
+    Enum(EnumType),
+    Option(Box<OptionType>),
+    Result(Box<ResultType>),
+}
+
+impl From<reflect::Type<'_>> for Type {
+    fn from(ty: reflect::Type<'_>) -> Self {
+        match ty {
+            reflect::Type::Bool => Self::Bool,
+            reflect::Type::U8 => Self::U8,
+            reflect::Type::S8 => Self::S8,
+            reflect::Type::U16 => Self::U16,
+            reflect::Type::S16 => Self::S16,
+            reflect::Type::U32 => Self::U32,
+            reflect::Type::S32 => Self::S32,
+            reflect::Type::U64 => Self::U64,
+            reflect::Type::S64 => Self::S64,
+            reflect::Type::F32 => Self::F32,
+            reflect::Type::F64 => Self::F64,
+            reflect::Type::Char => Self::Char,
+            reflect::Type::Bytes => Self::Bytes,
+            reflect::Type::String => Self::String,
+            reflect::Type::Record(ty) => Self::Record(ty.get::<RecordType>().clone()),
+            reflect::Type::Variant(ty) => Self::Variant(ty.get::<VariantType>().clone()),
+            reflect::Type::List(ty) => Self::List(Box::new(ty.get::<ListType>().clone())),
+            reflect::Type::Tuple(ty) => Self::Tuple(ty.get::<TupleType>().clone()),
+            reflect::Type::Flags(ty) => Self::Flags(ty.get::<FlagsType>().clone()),
+            reflect::Type::Enum(ty) => Self::Enum(ty.get::<EnumType>().clone()),
+            reflect::Type::Option(ty) => Self::Option(Box::new(ty.get::<OptionType>().clone())),
+            reflect::Type::Result(ty) => Self::Result(Box::new(ty.get::<ResultType>().clone())),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct RecordType(Rc<[(Box<str>, Type)]>);
+
+impl Deref for RecordType {
+    type Target = Rc<[(Box<str>, Type)]>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl GuestRecordType for RecordType {
+    fn new(fields: Vec<(String, reflect::Type<'_>)>) -> Self {
+        let fields = fields
+            .into_iter()
+            .map(|(name, ty)| (name.into(), ty.into()))
+            .collect();
+        Self(fields)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct VariantType(Rc<[(Box<str>, Option<Type>)]>);
+
+impl GuestVariantType for VariantType {
+    fn new(cases: Vec<(String, Option<reflect::Type<'_>>)>) -> Self {
+        let cases = cases
+            .into_iter()
+            .map(|(name, ty)| (name.into(), ty.map(Into::into)))
+            .collect();
+        Self(cases)
+    }
+}
+
+impl Deref for VariantType {
+    type Target = Rc<[(Box<str>, Option<Type>)]>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct ListType(Type);
+
+impl GuestListType for ListType {
+    fn new(ty: reflect::Type<'_>) -> Self {
+        Self(ty.into())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct TupleType(Rc<[Type]>);
+
+impl Deref for TupleType {
+    type Target = Rc<[Type]>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl GuestTupleType for TupleType {
+    fn new(types: Vec<reflect::Type<'_>>) -> Self {
+        let types = types.into_iter().map(Into::into).collect();
+        Self(types)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct FlagsType(Rc<[Box<str>]>);
+
+impl Deref for FlagsType {
+    type Target = Rc<[Box<str>]>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl GuestFlagsType for FlagsType {
+    fn new(cases: Vec<String>) -> Self {
+        let cases = cases.into_iter().map(Into::into).collect();
+        Self(cases)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct EnumType(Rc<[Box<str>]>);
+
+impl Deref for EnumType {
+    type Target = Rc<[Box<str>]>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl GuestEnumType for EnumType {
+    fn new(cases: Vec<String>) -> Self {
+        let cases = cases.into_iter().map(Into::into).collect();
+        Self(cases)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct OptionType(Type);
+
+impl GuestOptionType for OptionType {
+    fn new(ty: reflect::Type<'_>) -> Self {
+        Self(ty.into())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct ResultType {
+    ok: Option<Type>,
+    err: Option<Type>,
+}
+
+impl GuestResultType for ResultType {
+    fn new(ok: Option<reflect::Type<'_>>, err: Option<reflect::Type<'_>>) -> Self {
+        let ok = ok.map(Into::into);
+        let err = err.map(Into::into);
+        Self { ok, err }
+    }
+}
 
 #[repr(transparent)]
 struct Error(serde_json::Error);
@@ -219,7 +421,7 @@ impl deserializer::GuestDeserializer for Deserializer {
 
     fn deserialize_record(
         this: deserializer::Deserializer,
-        fields: Vec<String>,
+        ty: RecordTypeBorrow<'_>,
     ) -> Result<
         (
             u32,
@@ -228,10 +430,11 @@ impl deserializer::GuestDeserializer for Deserializer {
         ),
         deserializer::Error,
     > {
+        let ty = ty.get();
         match this.into_inner::<Self>() {
             Self::Source(mut src) => {
                 let mut vs = src
-                    .deserialize_struct("", &[], RecordVisitor(fields))
+                    .deserialize_struct("", &[], RecordVisitor(ty))
                     .map_err(Error::wrap)?;
                 let v = vs
                     .pop()
@@ -246,10 +449,10 @@ impl deserializer::GuestDeserializer for Deserializer {
                 ))
             }
             Self::Value(serde_json::Value::Array(mut vs)) => {
-                if vs.len() != fields.len() {
+                if vs.len() != ty.len() {
                     return Err(Error::wrap(serde_json::Error::invalid_length(
                         vs.len(),
-                        &RecordVisitor(fields),
+                        &RecordVisitor(ty),
                     )));
                 }
                 vs.reverse();
@@ -266,9 +469,9 @@ impl deserializer::GuestDeserializer for Deserializer {
                 ))
             }
             Self::Value(serde_json::Value::Object(mut obj)) => {
-                let mut vs = Vec::with_capacity(fields.len());
-                for name in fields.iter().rev() {
-                    let v = obj.remove(name).ok_or_else(|| {
+                let mut vs = Vec::with_capacity(ty.len());
+                for (name, _) in ty.iter().rev() {
+                    let v = obj.remove(name.as_ref()).ok_or_else(|| {
                         Error::wrap(serde_json::Error::custom(format!(
                             "field `{name}` not found"
                         )))
@@ -278,7 +481,7 @@ impl deserializer::GuestDeserializer for Deserializer {
                 if !obj.is_empty() {
                     return Err(Error::wrap(serde_json::Error::invalid_length(
                         obj.len().saturating_add(vs.len()),
-                        &RecordVisitor(fields),
+                        &RecordVisitor(ty),
                     )));
                 }
                 let v = vs
@@ -293,18 +496,19 @@ impl deserializer::GuestDeserializer for Deserializer {
                     }),
                 ))
             }
-            Self::Value(v) => Err(invalid_type(v, &RecordVisitor(fields))),
+            Self::Value(v) => Err(invalid_type(v, &RecordVisitor(ty))),
             Self::Empty => Err(Error::wrap(serde_json::Error::custom("empty deserializer"))),
         }
     }
 
     fn deserialize_variant(
         this: deserializer::Deserializer,
-        cases: Vec<(String, bool)>,
+        ty: VariantTypeBorrow<'_>,
     ) -> Result<(u32, deserializer::Deserializer), deserializer::Error> {
+        let ty = ty.get();
         let (idx, v) = this
             .into_inner::<Self>()
-            .deserialize_visitor(VariantVisitor(cases), |mut src, visitor| {
+            .deserialize_visitor(VariantVisitor(ty), |mut src, visitor| {
                 src.deserialize_enum("", &[], visitor)
             })?;
         let de = v.map(Deserializer::Value).unwrap_or(Deserializer::Empty);
@@ -313,6 +517,7 @@ impl deserializer::GuestDeserializer for Deserializer {
 
     fn deserialize_list(
         this: deserializer::Deserializer,
+        _ty: reflect::Type<'_>,
     ) -> Result<deserializer::ListDeserializer, deserializer::Error> {
         let mut vs: Vec<serde_json::Value> = this.into_inner::<Self>().deserialize()?;
         vs.reverse();
@@ -321,14 +526,14 @@ impl deserializer::GuestDeserializer for Deserializer {
 
     fn deserialize_tuple(
         this: deserializer::Deserializer,
-        n: u32,
+        ty: TupleTypeBorrow<'_>,
     ) -> Result<(deserializer::Deserializer, deserializer::TupleDeserializer), deserializer::Error>
     {
-        let n = n as _;
+        let ty = ty.get::<TupleType>();
         match this.into_inner::<Self>() {
             Self::Source(mut src) => {
                 let mut vs = src
-                    .deserialize_tuple(n, TupleVisitor(n))
+                    .deserialize_tuple(ty.len(), TupleVisitor(ty))
                     .map_err(Error::wrap)?;
                 vs.reverse();
                 let v = vs
@@ -340,9 +545,10 @@ impl deserializer::GuestDeserializer for Deserializer {
                 ))
             }
             Self::Value(serde_json::Value::Array(mut vs)) => {
-                if vs.len() != n {
+                if vs.len() != ty.len() {
                     return Err(Error::wrap(serde_json::Error::custom(format!(
-                        "expected {n} elements, got {}",
+                        "expected {} elements, got {}",
+                        ty.len(),
                         vs.len()
                     ))));
                 }
@@ -355,33 +561,34 @@ impl deserializer::GuestDeserializer for Deserializer {
                     deserializer::TupleDeserializer::new(TupleDeserializer(vs)),
                 ))
             }
-            Self::Value(v) => Err(invalid_type(v, &TupleVisitor(n))),
+            Self::Value(v) => Err(invalid_type(v, &TupleVisitor(ty))),
             Self::Empty => Err(Error::wrap(serde_json::Error::custom("empty deserializer"))),
         }
     }
 
     fn deserialize_flags(
         this: deserializer::Deserializer,
-        cases: Vec<String>,
+        ty: FlagsTypeBorrow<'_>,
     ) -> Result<u32, deserializer::Error> {
         this.into_inner::<Self>()
-            .deserialize_visitor(FlagsVisitor(cases), |mut src, visitor| {
+            .deserialize_visitor(FlagsVisitor(ty.get()), |mut src, visitor| {
                 src.deserialize_struct("", &[], visitor)
             })
     }
 
     fn deserialize_enum(
         this: deserializer::Deserializer,
-        cases: Vec<String>,
+        ty: EnumTypeBorrow<'_>,
     ) -> Result<u32, deserializer::Error> {
         this.into_inner::<Self>()
-            .deserialize_visitor(EnumVisitor(cases), |mut src, visitor| {
+            .deserialize_visitor(EnumVisitor(ty.get()), |mut src, visitor| {
                 src.deserialize_enum("", &[], visitor)
             })
     }
 
     fn deserialize_option(
         this: deserializer::Deserializer,
+        _ty: reflect::Type<'_>,
     ) -> Result<Option<deserializer::Deserializer>, deserializer::Error> {
         let v: Option<serde_json::Value> = this.into_inner::<Self>().deserialize()?;
         Ok(v.map(|v| deserializer::Deserializer::new(Deserializer::Value(v))))
@@ -389,11 +596,11 @@ impl deserializer::GuestDeserializer for Deserializer {
 
     fn deserialize_result(
         this: deserializer::Deserializer,
-        ok: bool,
-        err: bool,
+        ok: Option<reflect::Type<'_>>,
+        err: Option<reflect::Type<'_>>,
     ) -> Result<Result<deserializer::Deserializer, deserializer::Deserializer>, deserializer::Error>
     {
-        match (ok, err) {
+        match (ok.is_some(), err.is_some()) {
             (true, true) => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "lowercase")]
@@ -523,37 +730,37 @@ impl GuestListDeserializer for ListDeserializer {
     }
 }
 
-struct TupleVisitor(usize);
+struct TupleVisitor<'a>(&'a TupleType);
 
-impl<'de> de::Visitor<'de> for TupleVisitor {
+impl<'de> de::Visitor<'de> for TupleVisitor<'_> {
     type Value = Vec<serde_json::Value>;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a tuple with {:?} elements", self.0)
+        write!(f, "a tuple of type {:?}", self.0.0)
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
     where
         A: de::SeqAccess<'de>,
     {
-        let mut values = Vec::with_capacity(self.0);
+        let mut values = Vec::with_capacity(self.0.len());
         while let Some(v) = seq.next_element()? {
             values.push(v)
         }
-        if values.len() != self.0 {
+        if values.len() != self.0.len() {
             return Err(A::Error::invalid_length(values.len(), &self));
         }
         Ok(values)
     }
 }
 
-struct RecordVisitor(Vec<String>);
+struct RecordVisitor<'a>(&'a RecordType);
 
-impl<'de> de::Visitor<'de> for RecordVisitor {
+impl<'de> de::Visitor<'de> for RecordVisitor<'_> {
     type Value = Vec<serde_json::Value>;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a record with fields: {:?}", self.0)
+        write!(f, "a record with fields: {:?}", self.0.0)
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
@@ -578,9 +785,9 @@ impl<'de> de::Visitor<'de> for RecordVisitor {
         A: de::MapAccess<'de>,
     {
         let mut values = vec![serde_json::Value::Null; self.0.len()];
-        let mut indexes: HashMap<_, _> = zip(self.0.iter().map(String::as_str), 0..).collect();
-        while let Some((k, v)) = map.next_entry::<String, _>()? {
-            let idx = indexes.remove(k.as_str()).ok_or_else(|| {
+        let mut indexes: HashMap<_, _> = zip(self.0.iter().map(|(k, _)| k.as_ref()), 0..).collect();
+        while let Some((k, v)) = map.next_entry::<Cow<str>, _>()? {
+            let idx = indexes.remove(k.as_ref()).ok_or_else(|| {
                 A::Error::custom(format!("unknown field `{k}` from `{indexes:?}`"))
             })?;
             values[self.0.len() - 1 - idx] = v;
@@ -595,22 +802,22 @@ impl<'de> de::Visitor<'de> for RecordVisitor {
     }
 }
 
-struct VariantVisitor(Vec<(String, bool)>);
+struct VariantVisitor<'a>(&'a VariantType);
 
-impl<'de> de::Visitor<'de> for VariantVisitor {
+impl<'de> de::Visitor<'de> for VariantVisitor<'_> {
     type Value = (u32, Option<serde_json::Value>);
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a variant with cases: {:?}", self.0)
+        write!(f, "a variant with cases: {:?}", self.0.0)
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        for (idx, (name, payload)) in zip(0.., &self.0) {
-            if v == name.as_str() {
-                if *payload {
+        for (idx, (name, payload)) in zip(0.., self.0.as_ref()) {
+            if v == name.as_ref() {
+                if payload.is_some() {
                     return Err(E::custom("missing payload"));
                 }
                 return Ok((idx, None));
@@ -627,14 +834,14 @@ impl<'de> de::Visitor<'de> for VariantVisitor {
         A: de::MapAccess<'de>,
     {
         let (Some((k, v)), None) = (
-            map.next_entry::<String, serde_json::Value>()?,
-            map.next_entry::<String, serde_json::Value>()?,
+            map.next_entry::<Cow<str>, serde_json::Value>()?,
+            map.next_entry::<Cow<str>, serde_json::Value>()?,
         ) else {
             return Err(A::Error::custom("the object must have exactly one field"));
         };
-        for (idx, (name, payload)) in zip(0.., &self.0) {
-            if k == name.as_str() {
-                let v = if *payload {
+        for (idx, (name, payload)) in zip(0.., self.0.as_ref()) {
+            if k == name.as_ref() {
+                let v = if payload.is_some() {
                     Some(v)
                 } else {
                     if !v.is_null() {
@@ -656,9 +863,9 @@ impl<'de> de::Visitor<'de> for VariantVisitor {
         A: de::EnumAccess<'de>,
     {
         let (k, v): (Cow<str>, _) = data.variant()?;
-        for (idx, (name, payload)) in zip(0.., &self.0) {
-            if k == name.as_str() {
-                let v = if *payload {
+        for (idx, (name, payload)) in zip(0.., self.0.as_ref()) {
+            if k == name.as_ref() {
+                let v = if payload.is_some() {
                     let v = v.newtype_variant()?;
                     Some(v)
                 } else {
@@ -675,27 +882,27 @@ impl<'de> de::Visitor<'de> for VariantVisitor {
     }
 }
 
-struct EnumVisitor(Vec<String>);
+struct EnumVisitor<'a>(&'a EnumType);
 
-impl<'de> de::Visitor<'de> for EnumVisitor {
+impl<'de> de::Visitor<'de> for EnumVisitor<'_> {
     type Value = u32;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "an enum with cases: {:?}", self.0)
+        write!(f, "an enum with cases: {:?}", self.0.0)
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        for (idx, name) in zip(0.., &self.0) {
-            if v == name.as_str() {
+        for (idx, name) in zip(0.., self.0.as_ref()) {
+            if v == name.as_ref() {
                 return Ok(idx);
             }
         }
         Err(E::custom(format!(
             "unknown enum case `{v}`, expected one of `{:?}`",
-            self.0
+            self.0.0
         )))
     }
 
@@ -704,13 +911,13 @@ impl<'de> de::Visitor<'de> for EnumVisitor {
         A: de::MapAccess<'de>,
     {
         let (Some((k, v)), None) = (
-            map.next_entry::<String, serde_json::Value>()?,
-            map.next_entry::<String, serde_json::Value>()?,
+            map.next_entry::<Cow<str>, serde_json::Value>()?,
+            map.next_entry::<Cow<str>, serde_json::Value>()?,
         ) else {
             return Err(A::Error::custom("the object must have exactly one field"));
         };
-        for (idx, name) in zip(0.., &self.0) {
-            if k == name.as_str() {
+        for (idx, name) in zip(0.., self.0.as_ref()) {
+            if k == name.as_ref() {
                 if !v.is_null() {
                     return Err(A::Error::custom("unexpected payload received"));
                 }
@@ -719,7 +926,7 @@ impl<'de> de::Visitor<'de> for EnumVisitor {
         }
         Err(A::Error::custom(format!(
             "unknown enum case `{v}`, expected one of `{:?}`",
-            self.0
+            self.0.0
         )))
     }
 
@@ -728,26 +935,26 @@ impl<'de> de::Visitor<'de> for EnumVisitor {
         A: de::EnumAccess<'de>,
     {
         let (k, v): (Cow<str>, _) = data.variant()?;
-        for (idx, name) in zip(0.., &self.0) {
-            if k == name.as_str() {
+        for (idx, name) in zip(0.., self.0.as_ref()) {
+            if k == name.as_ref() {
                 v.unit_variant()?;
                 return Ok(idx);
             }
         }
         Err(A::Error::custom(format!(
             "unknown enum case `{k}`, expected one of `{:?}`",
-            self.0
+            self.0.0
         )))
     }
 }
 
-struct FlagsVisitor(Vec<String>);
+struct FlagsVisitor<'a>(&'a FlagsType);
 
-impl<'de> de::Visitor<'de> for FlagsVisitor {
+impl<'de> de::Visitor<'de> for FlagsVisitor<'_> {
     type Value = u32;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a flags with cases: {:?}", self.0)
+        write!(f, "a flags with cases: {:?}", self.0.0)
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
@@ -778,10 +985,10 @@ impl<'de> de::Visitor<'de> for FlagsVisitor {
     {
         debug_assert!(self.0.len() <= 32, "flags may contain at most 32 cases");
         let mut flags = 0;
-        let mut cases: HashMap<String, u8> = zip(self.0.into_iter(), 0..).collect();
-        while let Some((k, v)) = map.next_entry::<String, _>()? {
+        let mut cases: HashMap<&str, u8> = zip(self.0.iter().map(|s| s.as_ref()), 0..).collect();
+        while let Some((k, v)) = map.next_entry::<Cow<str>, _>()? {
             let i = cases
-                .remove(&k)
+                .remove(k.as_ref())
                 .ok_or_else(|| A::Error::custom(format!("unknown case `{k}` received")))?;
             if v {
                 flags |= 1 << i;
