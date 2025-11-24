@@ -107,6 +107,51 @@ interface deserializer {
     }
 }
 
+interface serializer {
+    use reflect.{record-type, variant-type, list-type, tuple-type, flags-type, enum-type, option-type, result-type, %type};
+
+    resource tuple-serializer {
+        next: static func(this: tuple-serializer) -> tuple<serializer, tuple-serializer>;
+    }
+
+    resource record-serializer {
+        next: static func(this: record-serializer) -> tuple<serializer, record-serializer>;
+    }
+
+    resource list-serializer {
+        next: static func(this: list-serializer) -> tuple<serializer, list-serializer>;
+    }
+
+    resource serializer {
+        constructor();
+
+        serialize-bool: static func(this: serializer, v: bool);
+        serialize-u8: static func(this: serializer, v: u8);
+        serialize-s8: static func(this: serializer, v: s8);
+        serialize-u16: static func(this: serializer, v: u16);
+        serialize-s16: static func(this: serializer, v: s16);
+        serialize-u32: static func(this: serializer, v: u32);
+        serialize-s32: static func(this: serializer, v: s32);
+        serialize-u64: static func(this: serializer, v: u64);
+        serialize-s64: static func(this: serializer, v: s64);
+        serialize-f32: static func(this: serializer, v: f32);
+        serialize-f64: static func(this: serializer, v: f64);
+        serialize-char: static func(this: serializer, v: char);
+        serialize-bytes: static func(this: serializer, v: list<u8>);
+        serialize-string: static func(this: serializer, v: string);
+        serialize-record: static func(this: serializer, %type: borrow<record-type>) -> tuple<serializer, record-serializer>;
+        serialize-variant: static func(this: serializer, %type: borrow<variant-type>, case: u32) -> serializer;
+        serialize-list: static func(this: serializer, %type: %type, n: option<u32>) -> list-serializer;
+        serialize-tuple: static func(this: serializer, n: u32) -> tuple<serializer, tuple-serializer>;
+        serialize-flags: static func(this: serializer, %type: borrow<flags-type>, v: u32);
+        serialize-enum: static func(this: serializer, %type: borrow<enum-type>, v: u32);
+        serialize-none: static func(this: serializer);
+        serialize-some: static func(this: serializer, %type: %type) -> serializer;
+        serialize-ok: static func(this: serializer, %type: option<%type>) -> serializer;
+        serialize-err: static func(this: serializer, %type: option<%type>) -> serializer;
+    }
+}
+
 world format {
     export reflect;
     export deserializer;
