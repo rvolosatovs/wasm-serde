@@ -6,7 +6,9 @@ use wasmtime::{Engine, Store};
 use wit_component::ComponentEncoder;
 
 mod bindings {
-    wasmtime::component::bindgen!();
+    wasmtime::component::bindgen!({
+        world: "format",
+    });
 }
 use bindings::exports::rvolosatovs::serde::reflect::Type;
 

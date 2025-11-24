@@ -1,5 +1,7 @@
 mod bindings {
-    wasmtime::component::bindgen!();
+    wasmtime::component::bindgen!({
+        world: "format",
+    });
 }
 
 use core::mem;

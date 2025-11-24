@@ -1,6 +1,6 @@
 use core::fmt;
 use core::iter::zip;
-use core::ops::Deref;
+use core::ops::{Deref, DerefMut};
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use std::rc::Rc;
 use serde::de;
 use serde::de::value::{MapDeserializer, SeqDeserializer};
 use serde::de::{Error as _, VariantAccess as _};
-use serde::{Deserialize, Deserializer as _};
+use serde::{Deserialize, Deserializer as _, Serializer as _};
 use serde_json::de::IoRead;
 use wasm_serde::bindings::exports::rvolosatovs::serde::deserializer::{
     GuestListDeserializer, GuestRecordDeserializer, GuestTupleDeserializer,
@@ -20,7 +20,7 @@ use wasm_serde::bindings::exports::rvolosatovs::serde::reflect::{
     GuestRecordType, GuestResultType, GuestTupleType, GuestVariantType, RecordTypeBorrow,
     TupleTypeBorrow, VariantTypeBorrow,
 };
-use wasm_serde::bindings::exports::rvolosatovs::serde::{deserializer, reflect};
+use wasm_serde::bindings::exports::rvolosatovs::serde::{deserializer, reflect, serializer};
 
 struct Component;
 
@@ -995,5 +995,183 @@ impl<'de> de::Visitor<'de> for FlagsVisitor<'_> {
             }
         }
         Ok(flags)
+    }
+}
+
+struct Serializer(serde_json::Serializer<Vec<u8>>);
+
+impl Deref for Serializer {
+    type Target = serde_json::Serializer<Vec<u8>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Serializer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl serializer::Guest for Component {
+    type TupleSerializer = TupleSerializer;
+    type RecordSerializer = RecordSerializer;
+    type ListSerializer = ListSerializer;
+    type Serializer = Serializer;
+}
+
+impl serializer::GuestSerializer for Serializer {
+    fn new() -> Self {
+        Self(serde_json::Serializer::new(Vec::default()))
+    }
+
+    fn serialize_bool(this: serializer::Serializer, v: bool) {
+        this.into_inner::<Serializer>().serialize_bool(v).unwrap()
+    }
+
+    fn serialize_u8(this: serializer::Serializer, v: u8) {
+        this.into_inner::<Serializer>().serialize_u8(v).unwrap()
+    }
+
+    fn serialize_s8(this: serializer::Serializer, v: i8) {
+        this.into_inner::<Serializer>().serialize_i8(v).unwrap()
+    }
+
+    fn serialize_u16(this: serializer::Serializer, v: u16) {
+        this.into_inner::<Serializer>().serialize_u16(v).unwrap()
+    }
+
+    fn serialize_s16(this: serializer::Serializer, v: i16) {
+        this.into_inner::<Serializer>().serialize_i16(v).unwrap()
+    }
+
+    fn serialize_u32(this: serializer::Serializer, v: u32) {
+        this.into_inner::<Serializer>().serialize_u32(v).unwrap()
+    }
+
+    fn serialize_s32(this: serializer::Serializer, v: i32) {
+        this.into_inner::<Serializer>().serialize_i32(v).unwrap()
+    }
+
+    fn serialize_u64(this: serializer::Serializer, v: u64) {
+        this.into_inner::<Serializer>().serialize_u64(v).unwrap()
+    }
+
+    fn serialize_s64(this: serializer::Serializer, v: i64) {
+        this.into_inner::<Serializer>().serialize_i64(v).unwrap()
+    }
+
+    fn serialize_f32(this: serializer::Serializer, v: f32) {
+        this.into_inner::<Serializer>().serialize_f32(v).unwrap()
+    }
+
+    fn serialize_f64(this: serializer::Serializer, v: f64) {
+        this.into_inner::<Serializer>().serialize_f64(v).unwrap()
+    }
+
+    fn serialize_char(this: serializer::Serializer, v: char) {
+        this.into_inner::<Serializer>().serialize_char(v).unwrap()
+    }
+
+    fn serialize_bytes(this: serializer::Serializer, v: Vec<u8>) {
+        this.into_inner::<Serializer>().serialize_bytes(&v).unwrap()
+    }
+
+    fn serialize_string(this: serializer::Serializer, v: String) {
+        this.into_inner::<Serializer>().serialize_str(&v).unwrap()
+    }
+
+    fn serialize_record(
+        this: serializer::Serializer,
+        ty: RecordTypeBorrow<'_>,
+    ) -> (serializer::Serializer, serializer::RecordSerializer) {
+        todo!()
+    }
+
+    fn serialize_variant(
+        this: serializer::Serializer,
+        ty: VariantTypeBorrow<'_>,
+        case: u32,
+    ) -> serializer::Serializer {
+        todo!()
+    }
+
+    fn serialize_list(
+        this: serializer::Serializer,
+        ty: reflect::Type<'_>,
+        n: Option<u32>,
+    ) -> serializer::ListSerializer {
+        todo!()
+    }
+
+    fn serialize_tuple(
+        this: serializer::Serializer,
+        n: u32,
+    ) -> (serializer::Serializer, serializer::TupleSerializer) {
+        todo!()
+    }
+
+    fn serialize_flags(this: serializer::Serializer, ty: FlagsTypeBorrow<'_>, v: u32) {
+        todo!()
+    }
+
+    fn serialize_enum(this: serializer::Serializer, ty: EnumTypeBorrow<'_>, v: u32) {
+        todo!()
+    }
+
+    fn serialize_none(this: serializer::Serializer) {
+        todo!()
+    }
+
+    fn serialize_some(
+        this: serializer::Serializer,
+        ty: reflect::Type<'_>,
+    ) -> serializer::Serializer {
+        todo!()
+    }
+
+    fn serialize_ok(
+        this: serializer::Serializer,
+        ty: Option<reflect::Type<'_>>,
+    ) -> serializer::Serializer {
+        todo!()
+    }
+
+    fn serialize_err(
+        this: serializer::Serializer,
+        ty: Option<reflect::Type<'_>>,
+    ) -> serializer::Serializer {
+        todo!()
+    }
+}
+
+struct TupleSerializer;
+
+impl serializer::GuestTupleSerializer for TupleSerializer {
+    fn next(
+        this: serializer::TupleSerializer,
+    ) -> (serializer::Serializer, serializer::TupleSerializer) {
+        todo!()
+    }
+}
+
+struct RecordSerializer;
+
+impl serializer::GuestRecordSerializer for RecordSerializer {
+    fn next(
+        this: serializer::RecordSerializer,
+    ) -> (serializer::Serializer, serializer::RecordSerializer) {
+        todo!()
+    }
+}
+
+struct ListSerializer;
+
+impl serializer::GuestListSerializer for ListSerializer {
+    fn next(
+        this: serializer::ListSerializer,
+    ) -> (serializer::Serializer, serializer::ListSerializer) {
+        todo!()
     }
 }

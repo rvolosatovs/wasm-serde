@@ -152,7 +152,16 @@ interface serializer {
     }
 }
 
+world imports {
+    import reflect;
+
+    import deserializer;
+    import serializer;
+}
+
 world format {
     export reflect;
+
     export deserializer;
+    export serializer;
 }
