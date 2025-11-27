@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use serde::de;
 use serde::de::value::{MapDeserializer, SeqDeserializer};
-use serde::de::{Error as _, VariantAccess as _};
+use serde::de::{Error as _, IntoDeserializer as _, VariantAccess as _};
 use serde::{Deserialize, Deserializer as _, Serializer as _};
 use serde_json::de::IoRead;
 use wasm_serde::bindings::exports::rvolosatovs::serde::deserializer::{
@@ -265,28 +265,28 @@ impl deserializer::GuestError for Error {
     }
 }
 
+fn invalid_number_type(v: serde_json::Number, exp: &dyn de::Expected) -> deserializer::Error {
+    let err = if let Some(v) = v.as_u64() {
+        serde_json::Error::invalid_type(de::Unexpected::Unsigned(v), exp)
+    } else if let Some(v) = v.as_i64() {
+        serde_json::Error::invalid_type(de::Unexpected::Signed(v), exp)
+    } else if let Some(v) = v.as_f64() {
+        serde_json::Error::invalid_type(de::Unexpected::Float(v), exp)
+    } else if let Some(v) = v.as_u128() {
+        serde_json::Error::invalid_type(de::Unexpected::Other(&format!("{v} as u128")), exp)
+    } else if let Some(v) = v.as_i128() {
+        serde_json::Error::invalid_type(de::Unexpected::Other(&format!("{v} as i128")), exp)
+    } else {
+        serde_json::Error::invalid_type(de::Unexpected::Other(&format!("{v} as unclassified")), exp)
+    };
+    Error::wrap(err)
+}
+
 fn invalid_type(v: serde_json::Value, exp: &dyn de::Expected) -> deserializer::Error {
     let err = match v {
         serde_json::Value::Null => serde_json::Error::invalid_type(de::Unexpected::Unit, exp),
         serde_json::Value::Bool(v) => serde_json::Error::invalid_type(de::Unexpected::Bool(v), exp),
-        serde_json::Value::Number(v) => {
-            if let Some(v) = v.as_u64() {
-                serde_json::Error::invalid_type(de::Unexpected::Unsigned(v), exp)
-            } else if let Some(v) = v.as_i64() {
-                serde_json::Error::invalid_type(de::Unexpected::Signed(v), exp)
-            } else if let Some(v) = v.as_f64() {
-                serde_json::Error::invalid_type(de::Unexpected::Float(v), exp)
-            } else if let Some(v) = v.as_u128() {
-                serde_json::Error::invalid_type(de::Unexpected::Other(&format!("{v} as u128")), exp)
-            } else if let Some(v) = v.as_i128() {
-                serde_json::Error::invalid_type(de::Unexpected::Other(&format!("{v} as i128")), exp)
-            } else {
-                serde_json::Error::invalid_type(
-                    de::Unexpected::Other(&format!("{v} as unclassified")),
-                    exp,
-                )
-            }
-        }
+        serde_json::Value::Number(v) => return invalid_number_type(v, exp),
         serde_json::Value::String(v) => {
             serde_json::Error::invalid_type(de::Unexpected::Str(&v), exp)
         }
@@ -298,6 +298,20 @@ fn invalid_type(v: serde_json::Value, exp: &dyn de::Expected) -> deserializer::E
 
 enum Deserializer {
     Source(serde_json::Deserializer<IoRead<Cursor<Vec<u8>>>>),
+    Bool(bool),
+    U8(u8),
+    S8(i8),
+    U16(u16),
+    S16(i16),
+    U32(u32),
+    S32(i32),
+    U64(u64),
+    S64(i64),
+    F32(f32),
+    F64(f64),
+    Char(char),
+    Bytes(Vec<u8>),
+    String(String),
     Value(serde_json::Value),
     Empty,
 }
@@ -306,10 +320,41 @@ impl Deserializer {
     fn deserialize<'a, T: Deserialize<'a>>(self) -> Result<T, deserializer::Error> {
         match self {
             Self::Source(mut src) => T::deserialize(&mut src),
+            Self::Bool(v) => T::deserialize(v.into_deserializer()),
+            Self::U8(v) => T::deserialize(v.into_deserializer()),
+            Self::S8(v) => T::deserialize(v.into_deserializer()),
+            Self::U16(v) => T::deserialize(v.into_deserializer()),
+            Self::S16(v) => T::deserialize(v.into_deserializer()),
+            Self::U32(v) => T::deserialize(v.into_deserializer()),
+            Self::S32(v) => T::deserialize(v.into_deserializer()),
+            Self::U64(v) => T::deserialize(v.into_deserializer()),
+            Self::S64(v) => T::deserialize(v.into_deserializer()),
+            Self::F32(v) => T::deserialize(v.into_deserializer()),
+            Self::F64(v) => T::deserialize(v.into_deserializer()),
+            Self::Char(v) => T::deserialize(v.into_deserializer()),
+            Self::Bytes(v) => T::deserialize(v.into_deserializer()),
+            Self::String(v) => T::deserialize(v.into_deserializer()),
             Self::Value(v) => T::deserialize(v),
             Self::Empty => Err(serde_json::Error::custom("empty deserializer")),
         }
         .map_err(Error::wrap)
+    }
+
+    fn deserialize_list<'a, T: Deserialize<'a>>(
+        self,
+        f: impl FnOnce(Vec<T>) -> ListDeserializer,
+    ) -> Result<ListDeserializer, deserializer::Error> {
+        let mut vs: Vec<T> = self.deserialize()?;
+        vs.reverse();
+        Ok(f(vs))
+    }
+
+    fn deserialize_option<'a, T: Deserialize<'a>>(
+        self,
+        f: impl FnOnce(T) -> Self,
+    ) -> Result<Option<Self>, deserializer::Error> {
+        let v: Option<T> = self.deserialize()?;
+        Ok(v.map(f))
     }
 
     fn deserialize_visitor<'a, T: de::Visitor<'a>>(
@@ -323,7 +368,21 @@ impl Deserializer {
         match self {
             Self::Source(source) => f(source, visitor),
             Self::Value(serde_json::Value::Null) => visitor.visit_unit::<serde_json::Error>(),
-            Self::Value(serde_json::Value::Bool(v)) => visitor.visit_bool::<serde_json::Error>(v),
+            Self::Bool(v) | Self::Value(serde_json::Value::Bool(v)) => {
+                visitor.visit_bool::<serde_json::Error>(v)
+            }
+            Self::U8(v) => visitor.visit_u8::<serde_json::Error>(v),
+            Self::S8(v) => visitor.visit_i8::<serde_json::Error>(v),
+            Self::U16(v) => visitor.visit_u16::<serde_json::Error>(v),
+            Self::S16(v) => visitor.visit_i16::<serde_json::Error>(v),
+            Self::U32(v) => visitor.visit_u32::<serde_json::Error>(v),
+            Self::S32(v) => visitor.visit_i32::<serde_json::Error>(v),
+            Self::U64(v) => visitor.visit_u64::<serde_json::Error>(v),
+            Self::S64(v) => visitor.visit_i64::<serde_json::Error>(v),
+            Self::F32(v) => visitor.visit_f32::<serde_json::Error>(v),
+            Self::F64(v) => visitor.visit_f64::<serde_json::Error>(v),
+            Self::Char(v) => visitor.visit_char::<serde_json::Error>(v),
+            Self::Bytes(v) => visitor.visit_byte_buf::<serde_json::Error>(v),
             Self::Value(serde_json::Value::Number(v)) => {
                 if let Some(v) = v.as_u64() {
                     visitor.visit_u64::<serde_json::Error>(v)
@@ -339,7 +398,7 @@ impl Deserializer {
                     Err(serde_json::Error::custom("failed to classify number"))
                 }
             }
-            Self::Value(serde_json::Value::String(v)) => {
+            Self::Value(serde_json::Value::String(v)) | Self::String(v) => {
                 visitor.visit_string::<serde_json::Error>(v)
             }
             Self::Value(serde_json::Value::Array(vs)) => {
@@ -497,6 +556,62 @@ impl deserializer::GuestDeserializer for Deserializer {
                 ))
             }
             Self::Value(v) => Err(invalid_type(v, &RecordVisitor(ty))),
+            Self::Bool(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Bool(v),
+                &RecordVisitor(ty),
+            ))),
+            Self::U8(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Unsigned(v.into()),
+                &RecordVisitor(ty),
+            ))),
+            Self::U16(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Unsigned(v.into()),
+                &RecordVisitor(ty),
+            ))),
+            Self::U32(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Unsigned(v.into()),
+                &RecordVisitor(ty),
+            ))),
+            Self::U64(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Unsigned(v),
+                &RecordVisitor(ty),
+            ))),
+            Self::S8(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Signed(v.into()),
+                &RecordVisitor(ty),
+            ))),
+            Self::S16(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Signed(v.into()),
+                &RecordVisitor(ty),
+            ))),
+            Self::S32(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Signed(v.into()),
+                &RecordVisitor(ty),
+            ))),
+            Self::S64(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Signed(v),
+                &RecordVisitor(ty),
+            ))),
+            Self::F32(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Float(v.into()),
+                &RecordVisitor(ty),
+            ))),
+            Self::F64(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Float(v),
+                &RecordVisitor(ty),
+            ))),
+            Self::Char(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Char(v),
+                &RecordVisitor(ty),
+            ))),
+            Self::Bytes(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Bytes(&v),
+                &RecordVisitor(ty),
+            ))),
+            Self::String(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Str(&v),
+                &RecordVisitor(ty),
+            ))),
             Self::Empty => Err(Error::wrap(serde_json::Error::custom("empty deserializer"))),
         }
     }
@@ -517,11 +632,31 @@ impl deserializer::GuestDeserializer for Deserializer {
 
     fn deserialize_list(
         this: deserializer::Deserializer,
-        _ty: reflect::Type<'_>,
+        ty: reflect::Type<'_>,
     ) -> Result<deserializer::ListDeserializer, deserializer::Error> {
-        let mut vs: Vec<serde_json::Value> = this.into_inner::<Self>().deserialize()?;
-        vs.reverse();
-        Ok(deserializer::ListDeserializer::new(ListDeserializer(vs)))
+        let this = this.into_inner::<Self>();
+        let de = match ty {
+            reflect::Type::Bool => this.deserialize_list(ListDeserializer::Bool)?,
+            reflect::Type::U8 => this.deserialize_list(ListDeserializer::U8)?,
+            reflect::Type::S8 => this.deserialize_list(ListDeserializer::S8)?,
+            reflect::Type::U16 => this.deserialize_list(ListDeserializer::U16)?,
+            reflect::Type::S16 => this.deserialize_list(ListDeserializer::S16)?,
+            reflect::Type::U32 => this.deserialize_list(ListDeserializer::U32)?,
+            reflect::Type::S32 => this.deserialize_list(ListDeserializer::S32)?,
+            reflect::Type::U64 => this.deserialize_list(ListDeserializer::U64)?,
+            reflect::Type::S64 => this.deserialize_list(ListDeserializer::S64)?,
+            reflect::Type::F32 => this.deserialize_list(ListDeserializer::F32)?,
+            reflect::Type::F64 => this.deserialize_list(ListDeserializer::F64)?,
+            reflect::Type::Char => this.deserialize_list(ListDeserializer::Char)?,
+            reflect::Type::Bytes => this.deserialize_list(ListDeserializer::Bytes)?,
+            reflect::Type::String => this.deserialize_list(ListDeserializer::String)?,
+            _ => {
+                let mut vs: Vec<serde_json::Value> = this.deserialize()?;
+                vs.reverse();
+                ListDeserializer::Value(vs)
+            }
+        };
+        Ok(deserializer::ListDeserializer::new(de))
     }
 
     fn deserialize_tuple(
@@ -541,7 +676,7 @@ impl deserializer::GuestDeserializer for Deserializer {
                     .ok_or_else(|| Error::wrap(serde_json::Error::custom("no elements found")))?;
                 Ok((
                     deserializer::Deserializer::new(Deserializer::Value(v)),
-                    deserializer::TupleDeserializer::new(TupleDeserializer(vs)),
+                    deserializer::TupleDeserializer::new(TupleDeserializer::Value(vs)),
                 ))
             }
             Self::Value(serde_json::Value::Array(mut vs)) => {
@@ -558,10 +693,79 @@ impl deserializer::GuestDeserializer for Deserializer {
                     .ok_or_else(|| Error::wrap(serde_json::Error::custom("no fields found")))?;
                 Ok((
                     deserializer::Deserializer::new(Deserializer::Value(v)),
-                    deserializer::TupleDeserializer::new(TupleDeserializer(vs)),
+                    deserializer::TupleDeserializer::new(TupleDeserializer::Value(vs)),
+                ))
+            }
+            Self::Bytes(mut vs) => {
+                if vs.len() != ty.len() {
+                    return Err(Error::wrap(serde_json::Error::custom(format!(
+                        "expected {} elements, got {}",
+                        ty.len(),
+                        vs.len()
+                    ))));
+                }
+                vs.reverse();
+                let v = vs
+                    .pop()
+                    .ok_or_else(|| Error::wrap(serde_json::Error::custom("no fields found")))?;
+                Ok((
+                    deserializer::Deserializer::new(Deserializer::U8(v)),
+                    deserializer::TupleDeserializer::new(TupleDeserializer::Byte(vs)),
                 ))
             }
             Self::Value(v) => Err(invalid_type(v, &TupleVisitor(ty))),
+            Self::Bool(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Bool(v),
+                &TupleVisitor(ty),
+            ))),
+            Self::U8(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Unsigned(v.into()),
+                &TupleVisitor(ty),
+            ))),
+            Self::U16(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Unsigned(v.into()),
+                &TupleVisitor(ty),
+            ))),
+            Self::U32(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Unsigned(v.into()),
+                &TupleVisitor(ty),
+            ))),
+            Self::U64(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Unsigned(v),
+                &TupleVisitor(ty),
+            ))),
+            Self::S8(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Signed(v.into()),
+                &TupleVisitor(ty),
+            ))),
+            Self::S16(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Signed(v.into()),
+                &TupleVisitor(ty),
+            ))),
+            Self::S32(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Signed(v.into()),
+                &TupleVisitor(ty),
+            ))),
+            Self::S64(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Signed(v),
+                &TupleVisitor(ty),
+            ))),
+            Self::F32(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Float(v.into()),
+                &TupleVisitor(ty),
+            ))),
+            Self::F64(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Float(v),
+                &TupleVisitor(ty),
+            ))),
+            Self::Char(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Char(v),
+                &TupleVisitor(ty),
+            ))),
+            Self::String(v) => Err(Error::wrap(serde_json::Error::invalid_type(
+                de::Unexpected::Str(&v),
+                &TupleVisitor(ty),
+            ))),
             Self::Empty => Err(Error::wrap(serde_json::Error::custom("empty deserializer"))),
         }
     }
@@ -588,10 +792,30 @@ impl deserializer::GuestDeserializer for Deserializer {
 
     fn deserialize_option(
         this: deserializer::Deserializer,
-        _ty: reflect::Type<'_>,
+        ty: reflect::Type<'_>,
     ) -> Result<Option<deserializer::Deserializer>, deserializer::Error> {
-        let v: Option<serde_json::Value> = this.into_inner::<Self>().deserialize()?;
-        Ok(v.map(|v| deserializer::Deserializer::new(Deserializer::Value(v))))
+        let this = this.into_inner::<Self>();
+        let de = match ty {
+            reflect::Type::Bool => this.deserialize_option(Self::Bool)?,
+            reflect::Type::U8 => this.deserialize_option(Self::U8)?,
+            reflect::Type::S8 => this.deserialize_option(Self::S8)?,
+            reflect::Type::U16 => this.deserialize_option(Self::U16)?,
+            reflect::Type::S16 => this.deserialize_option(Self::S16)?,
+            reflect::Type::U32 => this.deserialize_option(Self::U32)?,
+            reflect::Type::S32 => this.deserialize_option(Self::S32)?,
+            reflect::Type::U64 => this.deserialize_option(Self::U64)?,
+            reflect::Type::S64 => this.deserialize_option(Self::S64)?,
+            reflect::Type::F32 => this.deserialize_option(Self::F32)?,
+            reflect::Type::F64 => this.deserialize_option(Self::F64)?,
+            reflect::Type::Char => this.deserialize_option(Self::Char)?,
+            reflect::Type::Bytes => this.deserialize_option(Self::Bytes)?,
+            reflect::Type::String => this.deserialize_option(Self::String)?,
+            _ => {
+                let v: Option<serde_json::Value> = this.deserialize()?;
+                v.map(Deserializer::Value)
+            }
+        };
+        Ok(de.map(|de| deserializer::Deserializer::new(de)))
     }
 
     fn deserialize_result(
@@ -699,32 +923,79 @@ impl GuestRecordDeserializer for RecordDeserializer {
     }
 }
 
-struct TupleDeserializer(Vec<serde_json::Value>);
+enum TupleDeserializer {
+    Byte(Vec<u8>),
+    Value(Vec<serde_json::Value>),
+}
 
 impl GuestTupleDeserializer for TupleDeserializer {
     fn next(
         this: deserializer::TupleDeserializer,
     ) -> (deserializer::Deserializer, deserializer::TupleDeserializer) {
-        let mut this = this.into_inner::<Self>();
-        let v = this.0.pop().expect("no fields left to iterate");
-        (
-            deserializer::Deserializer::new(Deserializer::Value(v)),
-            deserializer::TupleDeserializer::new(this),
-        )
+        match this.into_inner::<Self>() {
+            Self::Byte(mut vs) => {
+                let v = vs.pop().expect("no fields left to iterate");
+                (
+                    deserializer::Deserializer::new(Deserializer::U8(v)),
+                    deserializer::TupleDeserializer::new(Self::Byte(vs)),
+                )
+            }
+            Self::Value(mut vs) => {
+                let v = vs.pop().expect("no fields left to iterate");
+                (
+                    deserializer::Deserializer::new(Deserializer::Value(v)),
+                    deserializer::TupleDeserializer::new(Self::Value(vs)),
+                )
+            }
+        }
     }
 }
 
-struct ListDeserializer(Vec<serde_json::Value>);
+enum ListDeserializer {
+    Bool(Vec<bool>),
+    U8(Vec<u8>),
+    S8(Vec<i8>),
+    U16(Vec<u16>),
+    S16(Vec<i16>),
+    U32(Vec<u32>),
+    S32(Vec<i32>),
+    U64(Vec<u64>),
+    S64(Vec<i64>),
+    F32(Vec<f32>),
+    F64(Vec<f64>),
+    Char(Vec<char>),
+    Bytes(Vec<Vec<u8>>),
+    String(Vec<String>),
+    Value(Vec<serde_json::Value>),
+}
 
 impl GuestListDeserializer for ListDeserializer {
     fn next(
         this: deserializer::ListDeserializer,
     ) -> Option<(deserializer::Deserializer, deserializer::ListDeserializer)> {
-        let mut this = this.into_inner::<Self>();
-        this.0.pop().map(|v| {
+        match this.into_inner::<Self>() {
+            Self::Bool(mut vs) => vs.pop().map(|v| (Deserializer::Bool(v), Self::Bool(vs))),
+            Self::U8(mut vs) => vs.pop().map(|v| (Deserializer::U8(v), Self::U8(vs))),
+            Self::S8(mut vs) => vs.pop().map(|v| (Deserializer::S8(v), Self::S8(vs))),
+            Self::U16(mut vs) => vs.pop().map(|v| (Deserializer::U16(v), Self::U16(vs))),
+            Self::S16(mut vs) => vs.pop().map(|v| (Deserializer::S16(v), Self::S16(vs))),
+            Self::U32(mut vs) => vs.pop().map(|v| (Deserializer::U32(v), Self::U32(vs))),
+            Self::S32(mut vs) => vs.pop().map(|v| (Deserializer::S32(v), Self::S32(vs))),
+            Self::U64(mut vs) => vs.pop().map(|v| (Deserializer::U64(v), Self::U64(vs))),
+            Self::S64(mut vs) => vs.pop().map(|v| (Deserializer::S64(v), Self::S64(vs))),
+            Self::F32(mut vs) => vs.pop().map(|v| (Deserializer::F32(v), Self::F32(vs))),
+            Self::F64(mut vs) => vs.pop().map(|v| (Deserializer::F64(v), Self::F64(vs))),
+            Self::Char(mut vs) => vs.pop().map(|v| (Deserializer::Char(v), Self::Char(vs))),
+            Self::Bytes(mut vs) => vs.pop().map(|v| (Deserializer::Bytes(v), Self::Bytes(vs))),
+            Self::String(mut vs) => vs
+                .pop()
+                .map(|v| (Deserializer::String(v), Self::String(vs))),
+            Self::Value(mut vs) => vs.pop().map(|v| (Deserializer::Value(v), Self::Value(vs))),
+        }
+        .map(|(de, next)| {
             (
-                deserializer::Deserializer::new(Deserializer::Value(v)),
-                deserializer::ListDeserializer::new(this),
+                deserializer::Deserializer::new(de),
+                deserializer::ListDeserializer::new(next),
             )
         })
     }
