@@ -688,7 +688,7 @@ impl deserializer::GuestDeserializer for Deserializer {
         match this.into_inner::<Self>() {
             Self::Source(mut src) => {
                 let mut vs = src
-                    .deserialize_struct("", &[], RecordVisitor(ty))
+                    .deserialize_struct("", &[], RecordVisitor::new(ty))
                     .map_err(Error::wrap)?;
                 let v = vs
                     .pop()
@@ -706,7 +706,7 @@ impl deserializer::GuestDeserializer for Deserializer {
                 if vs.len() != ty.len() {
                     return Err(Error::wrap(serde_json::Error::invalid_length(
                         vs.len(),
-                        &RecordVisitor(ty),
+                        &RecordVisitor::new(ty),
                     )));
                 }
                 vs.reverse();
@@ -735,7 +735,7 @@ impl deserializer::GuestDeserializer for Deserializer {
                 if !obj.is_empty() {
                     return Err(Error::wrap(serde_json::Error::invalid_length(
                         obj.len().saturating_add(vs.len()),
-                        &RecordVisitor(ty),
+                        &RecordVisitor::new(ty),
                     )));
                 }
                 let v = vs
@@ -751,7 +751,7 @@ impl deserializer::GuestDeserializer for Deserializer {
                 ))
             }
             Self::Value(v) => Err(Error::wrap(
-                v.invalid_type::<serde_json::Error>(&RecordVisitor(ty)),
+                v.invalid_type::<serde_json::Error>(&RecordVisitor::new(ty)),
             )),
             Self::Empty => Err(Error::wrap(serde_json::Error::custom("empty deserializer"))),
         }
@@ -1116,21 +1116,33 @@ impl<'de> de::Visitor<'de> for TupleVisitor<'_> {
     }
 }
 
-struct RecordVisitor<'a>(&'a RecordType);
+struct RecordVisitor<'a> {
+    ty: &'a RecordType,
+    fields: HashMap<&'a str, (&'a Type, usize)>,
+}
+
+impl<'a> RecordVisitor<'a> {
+    fn new(ty: &'a RecordType) -> Self {
+        let fields: HashMap<_, _> = zip(ty.iter(), 0..)
+            .map(|((name, ty), idx)| (name.as_ref(), (ty, idx)))
+            .collect();
+        Self { ty, fields }
+    }
+}
 
 impl<'de> de::Visitor<'de> for RecordVisitor<'_> {
     type Value = Vec<Value>;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a record with fields: {:?}", self.0.0)
+        write!(f, "a record with fields: {:?}", self.ty.0)
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
     where
         A: de::SeqAccess<'de>,
     {
-        let mut values = Vec::with_capacity(self.0.len());
-        for (_, ty) in self.0.iter() {
+        let mut values = Vec::with_capacity(self.ty.len());
+        for (_, ty) in self.ty.iter() {
             let Some(v) = seq.next_element_seed(ty)? else {
                 return Err(A::Error::invalid_length(
                     values.len().saturating_sub(values.len()),
@@ -1146,21 +1158,17 @@ impl<'de> de::Visitor<'de> for RecordVisitor<'_> {
     where
         A: de::MapAccess<'de>,
     {
-        let mut values = vec![Value::Raw(serde_json::Value::Null); self.0.len()];
-        let mut indexes: HashMap<_, _> = zip(self.0.iter().map(|(k, _)| k.as_ref()), 0..).collect();
+        let mut values = vec![Value::Raw(serde_json::Value::Null); self.ty.len()];
         while let Some(k) = map.next_key::<Cow<str>>()? {
-            let idx = indexes.remove(k.as_ref()).ok_or_else(|| {
-                A::Error::custom(format!("unknown field `{k}` from `{indexes:?}`"))
-            })?;
-            let (_, ty) = self.0.get(idx).unwrap();
-            let v = map.next_value_seed(ty)?;
-            values[self.0.len() - 1 - idx] = v;
+            let (ty, idx) = self
+                .fields
+                .get(k.as_ref())
+                .ok_or_else(|| A::Error::custom(format!("unknown field `{k}`")))?;
+            let v = map.next_value_seed(*ty)?;
+            values[self.ty.len() - 1 - idx] = v;
         }
-        if !indexes.is_empty() {
-            return Err(A::Error::invalid_length(
-                values.len().saturating_sub(indexes.len()),
-                &self,
-            ));
+        if values.len() != self.ty.len() {
+            return Err(A::Error::invalid_length(values.len(), &self));
         }
         Ok(values)
     }
