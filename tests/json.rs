@@ -1,7 +1,8 @@
+use core::fmt;
 use std::process::Command;
 use std::sync::LazyLock;
 
-use wasmtime::component::{Component, Linker, ResourceAny};
+use wasmtime::component::{Component, Linker};
 use wasmtime::{Engine, Store};
 use wit_component::ComponentEncoder;
 
@@ -10,12 +11,13 @@ mod bindings {
         world: "format",
     });
 }
-use bindings::exports::rvolosatovs::serde::reflect::Type;
+use bindings::exports::rvolosatovs::serde::reflect;
+use bindings::exports::rvolosatovs::serde::reflect::{List, ListType, Type, Value};
 
 static ENGINE: LazyLock<Engine> = LazyLock::new(Engine::default);
 
 static CODEC: LazyLock<bindings::FormatPre<()>> = LazyLock::new(|| {
-    let status = Command::new("cargo")
+    let status = Command::new(env!("CARGO"))
         .args([
             "build",
             "--manifest-path",
@@ -26,7 +28,7 @@ static CODEC: LazyLock<bindings::FormatPre<()>> = LazyLock::new(|| {
         .status()
         .expect("failed to build `json` component");
     assert!(status.success());
-    let buf = std::fs::read("./json/target/wasm32-unknown-unknown/debug/wasm_serde_json.wasm")
+    let buf = std::fs::read("./target/wasm32-unknown-unknown/debug/wasm_serde_json.wasm")
         .expect("failed to read component");
     let codec = ComponentEncoder::default()
         .module(&buf)
@@ -44,608 +46,659 @@ static CODEC: LazyLock<bindings::FormatPre<()>> = LazyLock::new(|| {
 
 struct Deserializer<'a> {
     store: &'a mut Store<()>,
-    codec: &'a bindings::exports::rvolosatovs::serde::deserializer::Guest,
     reflect: &'a bindings::exports::rvolosatovs::serde::reflect::Guest,
-    de: ResourceAny,
+    value: Value,
 }
 
-impl<'a> Deserializer<'a> {
-    fn with(&mut self, de: ResourceAny) -> Deserializer<'_> {
-        Deserializer {
-            store: self.store,
-            codec: self.codec,
-            reflect: self.reflect,
-            de,
+impl fmt::Debug for Deserializer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Deserializer")
+            .field("store", &self.store)
+            .field("value", &self.value)
+            .finish()
+    }
+}
+
+macro_rules! impl_unwrap_value_primitive {
+    ($rt:ident, $f:ident, $f_list:ident, $t:ty) => {
+        #[allow(dead_code)]
+        #[track_caller]
+        fn $f(self) -> $t {
+            let Value::$rt(v) = self else {
+                panic!("invalid value type");
+            };
+            v
         }
-    }
 
-    #[track_caller]
-    fn string_from_error(&mut self, err: ResourceAny) -> String {
-        self.codec
-            .error()
-            .call_to_string(&mut self.store, err)
-            .unwrap()
-    }
-
-    #[track_caller]
-    fn mk_string_from_error(&mut self) -> impl FnOnce(ResourceAny) -> String {
-        |err| self.string_from_error(err)
-    }
-
-    #[track_caller]
-    fn record_type(&mut self, fields: &[(String, Type)]) -> ResourceAny {
-        self.reflect
-            .record_type()
-            .call_constructor(&mut self.store, fields)
-            .unwrap()
-    }
-
-    #[track_caller]
-    fn variant_type(&mut self, cases: &[(String, Option<Type>)]) -> ResourceAny {
-        self.reflect
-            .variant_type()
-            .call_constructor(&mut self.store, cases)
-            .unwrap()
-    }
-
-    #[track_caller]
-    fn list_type(&mut self, ty: Type) -> ResourceAny {
-        self.reflect
-            .list_type()
-            .call_constructor(&mut self.store, ty)
-            .unwrap()
-    }
-
-    #[track_caller]
-    fn tuple_type(&mut self, types: &[Type]) -> ResourceAny {
-        self.reflect
-            .tuple_type()
-            .call_constructor(&mut self.store, types)
-            .unwrap()
-    }
-
-    #[track_caller]
-    fn flags_type(&mut self, cases: &[String]) -> ResourceAny {
-        self.reflect
-            .flags_type()
-            .call_constructor(&mut self.store, cases)
-            .unwrap()
-    }
-
-    #[track_caller]
-    fn enum_type(&mut self, cases: &[String]) -> ResourceAny {
-        self.reflect
-            .enum_type()
-            .call_constructor(&mut self.store, cases)
-            .unwrap()
-    }
-
-    #[track_caller]
-    fn option_type(&mut self, ty: Type) -> ResourceAny {
-        self.reflect
-            .option_type()
-            .call_constructor(&mut self.store, ty)
-            .unwrap()
-    }
-
-    #[track_caller]
-    fn result_type(&mut self, ok: Option<Type>, err: Option<Type>) -> ResourceAny {
-        self.reflect
-            .result_type()
-            .call_constructor(&mut self.store, ok, err)
-            .unwrap()
-    }
-
-    #[track_caller]
-    fn deserialize_record(
-        &mut self,
-        ty: ResourceAny,
-    ) -> Result<(u32, ResourceAny, ResourceAny), String> {
-        self.codec
-            .deserializer()
-            .call_deserialize_record(&mut self.store, self.de, ty)
-            .unwrap()
-            .map_err(self.mk_string_from_error())
-    }
-
-    #[track_caller]
-    fn deserialize_tuple(&mut self, ty: ResourceAny) -> Result<(ResourceAny, ResourceAny), String> {
-        self.codec
-            .deserializer()
-            .call_deserialize_tuple(&mut self.store, self.de, ty)
-            .unwrap()
-            .map_err(self.mk_string_from_error())
-    }
-
-    #[track_caller]
-    fn deserialize_list(&mut self, ty: Type) -> Result<ResourceAny, String> {
-        self.codec
-            .deserializer()
-            .call_deserialize_list(&mut self.store, self.de, ty)
-            .unwrap()
-            .map_err(self.mk_string_from_error())
-    }
-
-    #[track_caller]
-    fn deserialize_list_flat<T: Deserialize>(&mut self) -> Result<Vec<T>, String> {
-        let els = self.deserialize_list(T::ty())?;
-        let mut vs = Vec::new();
-        let mut de = ListIter(self.with(els));
-        while let Some(v_de) = de.next() {
-            let v = T::deserialize(de.0.with(v_de))?;
-            vs.push(v);
-        }
-        Ok(vs)
-    }
-
-    #[track_caller]
-    fn deserialize_variant(&mut self, ty: ResourceAny) -> Result<(u32, ResourceAny), String> {
-        self.codec
-            .deserializer()
-            .call_deserialize_variant(&mut self.store, self.de, ty)
-            .unwrap()
-            .map_err(self.mk_string_from_error())
-    }
-
-    #[track_caller]
-    fn deserialize_flags(&mut self, ty: ResourceAny) -> Result<u32, String> {
-        self.codec
-            .deserializer()
-            .call_deserialize_flags(&mut self.store, self.de, ty)
-            .unwrap()
-            .map_err(self.mk_string_from_error())
-    }
-
-    #[track_caller]
-    fn deserialize_enum(&mut self, ty: ResourceAny) -> Result<u32, String> {
-        self.codec
-            .deserializer()
-            .call_deserialize_enum(&mut self.store, self.de, ty)
-            .unwrap()
-            .map_err(self.mk_string_from_error())
-    }
-
-    #[track_caller]
-    fn deserialize_option(&mut self, ty: Type) -> Result<Option<ResourceAny>, String> {
-        self.codec
-            .deserializer()
-            .call_deserialize_option(&mut self.store, self.de, ty)
-            .unwrap()
-            .map_err(self.mk_string_from_error())
-    }
-
-    #[track_caller]
-    fn deserialize_result(
-        &mut self,
-        ok: Option<Type>,
-        err: Option<Type>,
-    ) -> Result<Result<ResourceAny, ResourceAny>, String> {
-        self.codec
-            .deserializer()
-            .call_deserialize_result(&mut self.store, self.de, ok, err)
-            .unwrap()
-            .map_err(self.mk_string_from_error())
-    }
-}
-
-trait Deserialize {
-    fn ty() -> Type;
-
-    fn deserialize(de: Deserializer<'_>) -> Result<Self, String>
-    where
-        Self: Sized;
-}
-
-macro_rules! impl_deserialize_flat {
-    ($t:ty, $f:ident, $rt:ident) => {
-        impl Deserialize for $t {
-            fn ty() -> Type {
-                Type::$rt
-            }
-
-            #[track_caller]
-            fn deserialize(mut de: Deserializer<'_>) -> Result<Self, String> {
-                de.codec
-                    .deserializer()
-                    .$f(&mut de.store, de.de)
-                    .unwrap()
-                    .map_err(de.mk_string_from_error())
-            }
+        #[allow(dead_code)]
+        #[track_caller]
+        fn $f_list(self) -> Vec<$t> {
+            let Value::List(List::$rt(vs)) = self else {
+                panic!("invalid value list type");
+            };
+            vs
         }
     };
 }
 
-impl_deserialize_flat!(bool, call_deserialize_bool, Bool);
-impl_deserialize_flat!(u8, call_deserialize_u8, U8);
-impl_deserialize_flat!(u16, call_deserialize_u16, U16);
-impl_deserialize_flat!(u32, call_deserialize_u32, U32);
-impl_deserialize_flat!(u64, call_deserialize_u64, U64);
-impl_deserialize_flat!(i8, call_deserialize_s8, S8);
-impl_deserialize_flat!(i16, call_deserialize_s16, S16);
-impl_deserialize_flat!(i32, call_deserialize_s32, S32);
-impl_deserialize_flat!(i64, call_deserialize_s64, S64);
-impl_deserialize_flat!(f32, call_deserialize_f32, F32);
-impl_deserialize_flat!(f64, call_deserialize_f64, F64);
-impl_deserialize_flat!(char, call_deserialize_char, Char);
-impl_deserialize_flat!(String, call_deserialize_string, String);
-impl_deserialize_flat!(Vec<u8>, call_deserialize_bytes, Bytes);
-
-struct RecordIter<'a>(Deserializer<'a>);
-
-impl Iterator for RecordIter<'_> {
-    type Item = (u32, ResourceAny);
+impl Value {
+    impl_unwrap_value_primitive!(Bool, unwrap_bool, unwrap_list_bool, bool);
+    impl_unwrap_value_primitive!(U8, unwrap_u8, unwrap_list_u8, u8);
+    impl_unwrap_value_primitive!(U16, unwrap_u16, unwrap_list_u16, u16);
+    impl_unwrap_value_primitive!(U32, unwrap_u32, unwrap_list_u32, u32);
+    impl_unwrap_value_primitive!(U64, unwrap_u64, unwrap_list_u64, u64);
+    impl_unwrap_value_primitive!(S8, unwrap_s8, unwrap_list_s8, i8);
+    impl_unwrap_value_primitive!(S16, unwrap_s16, unwrap_list_s16, i16);
+    impl_unwrap_value_primitive!(S32, unwrap_s32, unwrap_list_s32, i32);
+    impl_unwrap_value_primitive!(S64, unwrap_s64, unwrap_list_s64, i64);
+    impl_unwrap_value_primitive!(F32, unwrap_f32, unwrap_list_f32, f32);
+    impl_unwrap_value_primitive!(F64, unwrap_f64, unwrap_list_f64, f64);
+    impl_unwrap_value_primitive!(Char, unwrap_char, unwrap_list_char, char);
+    impl_unwrap_value_primitive!(String, unwrap_string, unwrap_list_string, String);
+    impl_unwrap_value_primitive!(Flags, unwrap_flags, unwrap_list_flags, u32);
+    impl_unwrap_value_primitive!(Enum, unwrap_enum, unwrap_list_enum, u32);
 
     #[track_caller]
-    fn next(&mut self) -> Option<Self::Item> {
-        let (idx, de, next) = self
-            .0
-            .codec
-            .record_deserializer()
-            .call_next(&mut self.0.store, self.0.de)
-            .unwrap();
-        self.0.de = next;
-        Some((idx, de))
+    fn unwrap_record(self, store: &mut Store<()>, reflect: &reflect::Guest) -> Vec<Value> {
+        let Value::Record(v) = self else {
+            panic!("invalid value type");
+        };
+        reflect.record_value().call_into_value(store, v).unwrap()
+    }
+
+    #[track_caller]
+    fn unwrap_tuple(self, store: &mut Store<()>, reflect: &reflect::Guest) -> Vec<Value> {
+        let Value::Tuple(v) = self else {
+            panic!("invalid value type");
+        };
+        reflect.tuple_value().call_into_value(store, v).unwrap()
+    }
+
+    #[expect(dead_code)]
+    #[track_caller]
+    fn unwrap_list(self) -> List {
+        let Value::List(v) = self else {
+            panic!("invalid value type");
+        };
+        v
+    }
+
+    #[track_caller]
+    fn unwrap_variant(
+        self,
+        store: &mut Store<()>,
+        reflect: &reflect::Guest,
+    ) -> (u32, Option<Self>) {
+        let Value::Variant(v) = self else {
+            panic!("invalid value type");
+        };
+        reflect.variant_value().call_into_value(store, v).unwrap()
+    }
+
+    #[track_caller]
+    fn unwrap_option(self, store: &mut Store<()>, reflect: &reflect::Guest) -> Option<Self> {
+        let Value::Option(v) = self else {
+            panic!("invalid value type");
+        };
+        reflect.option_value().call_into_value(store, v).unwrap()
+    }
+
+    #[track_caller]
+    fn unwrap_result(
+        self,
+        store: &mut Store<()>,
+        reflect: &reflect::Guest,
+    ) -> Result<Option<Self>, Option<Self>> {
+        let Value::Result(v) = self else {
+            panic!("invalid value type");
+        };
+        reflect.result_value().call_into_value(store, v).unwrap()
     }
 }
 
-struct ListIter<'a>(Deserializer<'a>);
+macro_rules! impl_unwrap_deserializer_primitive {
+    ($f:ident, $f_list:ident, $t:ty) => {
+        #[allow(dead_code)]
+        #[track_caller]
+        fn $f(self) -> $t {
+            self.value.$f()
+        }
 
-impl Iterator for ListIter<'_> {
-    type Item = ResourceAny;
-
-    #[track_caller]
-    fn next(&mut self) -> Option<Self::Item> {
-        let (de, next) = self
-            .0
-            .codec
-            .list_deserializer()
-            .call_next(&mut self.0.store, self.0.de)
-            .unwrap()?;
-        self.0.de = next;
-        Some(de)
-    }
+        #[allow(dead_code)]
+        #[track_caller]
+        fn $f_list(self) -> Vec<$t> {
+            self.value.$f_list()
+        }
+    };
 }
 
-struct TupleIter<'a>(Deserializer<'a>);
-
-impl Iterator for TupleIter<'_> {
-    type Item = ResourceAny;
+impl<'a> Deserializer<'a> {
+    impl_unwrap_deserializer_primitive!(unwrap_bool, unwrap_list_bool, bool);
+    impl_unwrap_deserializer_primitive!(unwrap_u8, unwrap_list_u8, u8);
+    impl_unwrap_deserializer_primitive!(unwrap_u16, unwrap_list_u16, u16);
+    impl_unwrap_deserializer_primitive!(unwrap_u32, unwrap_list_u32, u32);
+    impl_unwrap_deserializer_primitive!(unwrap_u64, unwrap_list_u64, u64);
+    impl_unwrap_deserializer_primitive!(unwrap_s8, unwrap_list_s8, i8);
+    impl_unwrap_deserializer_primitive!(unwrap_s16, unwrap_list_s16, i16);
+    impl_unwrap_deserializer_primitive!(unwrap_s32, unwrap_list_s32, i32);
+    impl_unwrap_deserializer_primitive!(unwrap_s64, unwrap_list_s64, i64);
+    impl_unwrap_deserializer_primitive!(unwrap_f32, unwrap_list_f32, f32);
+    impl_unwrap_deserializer_primitive!(unwrap_f64, unwrap_list_f64, f64);
+    impl_unwrap_deserializer_primitive!(unwrap_char, unwrap_list_char, char);
+    impl_unwrap_deserializer_primitive!(unwrap_string, unwrap_list_string, String);
+    impl_unwrap_deserializer_primitive!(unwrap_enum, unwrap_list_enum, u32);
+    impl_unwrap_deserializer_primitive!(unwrap_flags, unwrap_list_flags, u32);
 
     #[track_caller]
-    fn next(&mut self) -> Option<Self::Item> {
-        let (de, next) = self
-            .0
-            .codec
-            .tuple_deserializer()
-            .call_next(&mut self.0.store, self.0.de)
-            .unwrap();
-        self.0.de = next;
-        Some(de)
+    fn unwrap_record(self) -> (Self, Vec<Value>) {
+        let mut fields = self.value.unwrap_record(self.store, self.reflect);
+        fields.reverse();
+        let v = fields.pop().unwrap();
+        (Self { value: v, ..self }, fields)
+    }
+
+    #[expect(dead_code)]
+    #[track_caller]
+    fn unwrap_tuple(self) -> (Self, Vec<Value>) {
+        let mut values = self.value.unwrap_tuple(self.store, self.reflect);
+        values.reverse();
+        let v = values.pop().unwrap();
+        (Self { value: v, ..self }, values)
+    }
+
+    #[track_caller]
+    fn unwrap_variant(self) -> (u32, Option<Self>) {
+        let (case, payload) = self.value.unwrap_variant(self.store, self.reflect);
+        (case, payload.map(|value| Self { value, ..self }))
+    }
+
+    #[track_caller]
+    fn unwrap_option(self) -> Option<Self> {
+        self.value
+            .unwrap_option(self.store, self.reflect)
+            .map(|value| Self { value, ..self })
+    }
+
+    #[track_caller]
+    fn unwrap_result(self) -> Result<Option<Self>, Option<Self>> {
+        match self.value.unwrap_result(self.store, self.reflect) {
+            Ok(None) => Ok(None),
+            Ok(Some(value)) => Ok(Some(Self { value, ..self })),
+            Err(None) => Err(None),
+            Err(Some(value)) => Err(Some(Self { value, ..self })),
+        }
     }
 }
 
 #[track_caller]
-fn with_deserializer<T>(payload: impl AsRef<[u8]>, f: impl FnOnce(Deserializer<'_>) -> T) -> T {
+fn with_deserializer<T>(
+    payload: impl AsRef<[u8]>,
+    mk_ty: impl FnOnce(&mut Store<()>, &reflect::Guest) -> Type,
+    f: impl FnOnce(Result<Deserializer<'_>, String>) -> T,
+) -> T {
     let mut store = Store::new(&ENGINE, ());
     let codec = CODEC
         .instantiate(&mut store)
         .expect("failed to instantiate codec");
-    let de = codec
+    let ty = mk_ty(&mut store, codec.rvolosatovs_serde_reflect());
+    match codec
         .rvolosatovs_serde_deserializer()
-        .deserializer()
-        .call_from_list(&mut store, payload.as_ref())
+        .call_from_list(&mut store, payload.as_ref(), ty)
+        .unwrap()
+    {
+        Ok(de) => f(Ok(Deserializer {
+            store: &mut store,
+            reflect: codec.rvolosatovs_serde_reflect(),
+            value: de,
+        })),
+        Err(err) => {
+            let err = codec
+                .rvolosatovs_serde_deserializer()
+                .error()
+                .call_to_string(&mut store, err)
+                .unwrap();
+            f(Err(err))
+        }
+    }
+}
+
+#[track_caller]
+fn mk_foo_bar_variant_type(store: &mut Store<()>, de: &reflect::Guest) -> Type {
+    let ty = de
+        .variant_type()
+        .call_constructor(
+            store,
+            &[("foo".into(), None), ("bar".into(), Some(Type::U32))],
+        )
         .unwrap();
-    f(Deserializer {
-        store: &mut store,
-        codec: codec.rvolosatovs_serde_deserializer(),
-        reflect: codec.rvolosatovs_serde_reflect(),
-        de,
-    })
+    Type::Variant(ty)
+}
+
+#[track_caller]
+fn mk_foo_bar_enum_type(store: &mut Store<()>, de: &reflect::Guest) -> Type {
+    let ty = de
+        .enum_type()
+        .call_constructor(store, &["foo".into(), "bar".into()])
+        .unwrap();
+    Type::Enum(ty)
+}
+
+#[track_caller]
+fn mk_a_b_c_d_flags_type(store: &mut Store<()>, de: &reflect::Guest) -> Type {
+    let ty = de
+        .flags_type()
+        .call_constructor(store, &["a".into(), "b".into(), "c".into(), "d".into()])
+        .unwrap();
+    Type::Flags(ty)
+}
+
+#[track_caller]
+fn mk_option_u32_type(store: &mut Store<()>, de: &reflect::Guest) -> Type {
+    let ty = de.option_type().call_constructor(store, Type::U32).unwrap();
+    Type::Option(ty)
 }
 
 #[test]
 fn bool_true() {
-    with_deserializer("true", |de| {
-        let v = bool::deserialize(de).unwrap();
-        assert_eq!(v, true);
-    })
+    with_deserializer(
+        "true",
+        |_, _| Type::Bool,
+        |de| {
+            let de = de.unwrap();
+            let v = de.unwrap_bool();
+            assert!(v);
+        },
+    )
 }
 
 #[test]
 fn bool_false() {
-    with_deserializer("false", |de| {
-        let v = bool::deserialize(de).unwrap();
-        assert_eq!(v, false);
-    })
+    with_deserializer(
+        "false",
+        |_, _| Type::Bool,
+        |de| {
+            let de = de.unwrap();
+            let v = de.unwrap_bool();
+            assert!(!v);
+        },
+    )
 }
 
 #[test]
 fn bool_invalid() {
-    with_deserializer("0", |de| {
-        let err = bool::deserialize(de).unwrap_err();
-        assert_eq!(
-            err,
-            "invalid type: integer `0`, expected a boolean at line 1 column 1"
-        );
-    })
+    with_deserializer(
+        "0",
+        |_, _| Type::Bool,
+        |de| {
+            let err = de.unwrap_err();
+            assert_eq!(
+                err,
+                "invalid type: integer `0`, expected a boolean at line 1 column 1"
+            );
+        },
+    )
 }
 
 #[test]
 fn char_tree_emoji() {
-    with_deserializer(r#""🌳""#, |de| {
-        let v = char::deserialize(de).unwrap();
-        assert_eq!(v, '🌳');
-    })
+    with_deserializer(
+        r#""🌳""#,
+        |_, _| Type::Char,
+        |de| {
+            let de = de.unwrap();
+            let v = de.unwrap_char();
+            assert_eq!(v, '🌳');
+        },
+    )
 }
 
 #[test]
 fn char_invalid() {
-    with_deserializer("0", |de| {
-        let err = char::deserialize(de).unwrap_err();
-        assert_eq!(
-            err,
-            "invalid type: integer `0`, expected a character at line 1 column 1"
-        );
-    })
+    with_deserializer(
+        "0",
+        |_, _| Type::Char,
+        |de| {
+            let err = de.unwrap_err();
+            assert_eq!(
+                err,
+                "invalid type: integer `0`, expected a character at line 1 column 1"
+            );
+        },
+    )
 }
 
 #[test]
 fn bytes_array() {
-    with_deserializer("[0, 1, 2]", |de| {
-        let v = <Vec<u8>>::deserialize(de).unwrap();
-        assert_eq!(v, [0, 1, 2]);
-    })
+    with_deserializer(
+        "[0, 1, 2]",
+        |_, _| Type::List(ListType::U8),
+        |de| {
+            let de = de.unwrap();
+            let v = de.unwrap_list_u8();
+            assert_eq!(v, [0, 1, 2]);
+        },
+    )
 }
 
 #[test]
 fn bytes_string() {
-    with_deserializer(r#""test""#, |de| {
-        let v = <Vec<u8>>::deserialize(de).unwrap();
-        assert_eq!(v, b"test");
-    })
+    with_deserializer(
+        r#""test""#,
+        |_, _| Type::List(ListType::U8),
+        |de| {
+            let de = de.unwrap();
+            let v = de.unwrap_list_u8();
+            assert_eq!(v, b"test");
+        },
+    )
 }
 
 #[test]
 fn bytes_invalid() {
-    with_deserializer("0", |de| {
-        let err = <Vec<u8>>::deserialize(de).unwrap_err();
-        assert_eq!(
-            err,
-            "invalid type: integer `0`, expected byte array at line 1 column 1"
-        );
-    })
+    with_deserializer(
+        "0",
+        |_, _| Type::List(ListType::U8),
+        |de| {
+            let err = de.unwrap_err();
+            assert_eq!(
+                err,
+                "invalid type: integer `0`, expected byte array at line 1 column 1"
+            );
+        },
+    )
 }
 
 #[test]
 fn string_ascii() {
-    with_deserializer(r#""test""#, |de| {
-        let v = String::deserialize(de).unwrap();
-        assert_eq!(v, "test");
-    })
+    with_deserializer(
+        r#""test""#,
+        |_, _| Type::String,
+        |de| {
+            let de = de.unwrap();
+            let v = de.unwrap_string();
+            assert_eq!(v, "test");
+        },
+    )
 }
 
 #[test]
 fn string_invalid() {
-    with_deserializer("0", |de| {
-        let err = String::deserialize(de).unwrap_err();
-        assert_eq!(
-            err,
-            "invalid type: integer `0`, expected a string at line 1 column 1"
-        );
-    })
+    with_deserializer(
+        "0",
+        |_, _| Type::String,
+        |de| {
+            let err = de.unwrap_err();
+            assert_eq!(
+                err,
+                "invalid type: integer `0`, expected a string at line 1 column 1"
+            );
+        },
+    )
 }
 
 #[test]
 fn variant_empty_string() {
-    with_deserializer(r#""foo""#, |mut de| {
-        let ty = de.variant_type(&[("foo".into(), None), ("bar".into(), Some(Type::U32))]);
-        let (v, _) = de.deserialize_variant(ty).unwrap();
-        assert_eq!(v, 0);
+    with_deserializer(r#""foo""#, mk_foo_bar_variant_type, |de| {
+        let de = de.unwrap();
+        let (c, de) = de.unwrap_variant();
+        assert_eq!(c, 0);
+        assert!(de.is_none());
     })
 }
 
 #[test]
 fn variant_unknown_string() {
-    with_deserializer(r#""baz""#, |mut de| {
-        let ty = de.variant_type(&[("foo".into(), None), ("bar".into(), Some(Type::U32))]);
-        let err = de.deserialize_variant(ty).unwrap_err();
+    with_deserializer(r#""baz""#, mk_foo_bar_variant_type, |de| {
+        let err = de.unwrap_err();
         assert_eq!(
             err,
-            r#"unknown variant case `baz`, expected one of `["foo", "bar"]`"#
+            r#"invalid value: string "baz", expected one of `["foo", "bar"]` at line 1 column 5"#
         );
     })
 }
 
 #[test]
 fn variant_empty_object() {
-    with_deserializer(r#"{"foo": null}"#, |mut de| {
-        let ty = de.variant_type(&[("foo".into(), None), ("bar".into(), Some(Type::U32))]);
-        let (v, _de) = de.deserialize_variant(ty).unwrap();
-        assert_eq!(v, 0);
+    with_deserializer(r#"{"foo": null}"#, mk_foo_bar_variant_type, |de| {
+        let de = de.unwrap();
+        let (c, de) = de.unwrap_variant();
+        assert_eq!(c, 0);
+        assert!(de.is_none());
     })
 }
 
 #[test]
 fn variant_payload_object() {
-    with_deserializer(r#"{"bar": 42}"#, |mut de| {
-        let ty = de.variant_type(&[("foo".into(), None), ("bar".into(), Some(Type::U32))]);
-        let (v, v_de) = de.deserialize_variant(ty).unwrap();
-        assert_eq!(v, 1);
-        let v = u32::deserialize(de.with(v_de)).unwrap();
-        assert_eq!(v, 42);
+    with_deserializer(r#"{"bar": 42}"#, mk_foo_bar_variant_type, |de| {
+        let de = de.unwrap();
+        let (c, de) = de.unwrap_variant();
+        assert_eq!(c, 1);
+        let de = de.unwrap();
+        let c = de.unwrap_u32();
+        assert_eq!(c, 42);
     })
 }
 
 #[test]
 fn variant_unknown_object() {
-    with_deserializer(r#"{"baz": null}"#, |mut de| {
-        let ty = de.variant_type(&[("foo".into(), None), ("bar".into(), Some(Type::U32))]);
-        let err = de.deserialize_variant(ty).unwrap_err();
+    with_deserializer(r#"{"baz": null}"#, mk_foo_bar_variant_type, |de| {
+        let err = de.unwrap_err();
         assert_eq!(
             err,
-            r#"unknown variant case `baz`, expected one of `["foo", "bar"]`"#
+            r#"invalid value: string "baz", expected one of `["foo", "bar"]` at line 1 column 6"#
         );
     })
 }
 
 #[test]
 fn enum_string() {
-    with_deserializer(r#""bar""#, |mut de| {
-        let ty = de.enum_type(&["foo".into(), "bar".into()]);
-        let v = de.deserialize_enum(ty).unwrap();
-        assert_eq!(v, 1);
+    with_deserializer(r#""bar""#, mk_foo_bar_enum_type, |de| {
+        let de = de.unwrap();
+        let c = de.unwrap_enum();
+        assert_eq!(c, 1);
     })
 }
 
 #[test]
 fn enum_unknown_string() {
-    with_deserializer(r#""baz""#, |mut de| {
-        let ty = de.enum_type(&["foo".into(), "bar".into()]);
-        let err = de.deserialize_enum(ty).unwrap_err();
+    with_deserializer(r#""baz""#, mk_foo_bar_enum_type, |de| {
+        let err = de.unwrap_err();
         assert_eq!(
             err,
-            r#"unknown enum case `baz`, expected one of `["foo", "bar"]`"#
+            r#"invalid value: string "baz", expected one of `["foo", "bar"]` at line 1 column 5"#
         );
     })
 }
 
 #[test]
 fn enum_object() {
-    with_deserializer(r#"{"bar": null}"#, |mut de| {
-        let ty = de.enum_type(&["foo".into(), "bar".into()]);
-        let v = de.deserialize_enum(ty).unwrap();
+    with_deserializer(r#"{"bar": null}"#, mk_foo_bar_enum_type, |de| {
+        let de = de.unwrap();
+        let v = de.unwrap_enum();
         assert_eq!(v, 1);
     })
 }
 
 #[test]
 fn enum_unknown_object() {
-    with_deserializer(r#"{"baz": null}"#, |mut de| {
-        let ty = de.enum_type(&["foo".into(), "bar".into()]);
-        let err = de.deserialize_enum(ty).unwrap_err();
+    with_deserializer(r#"{"baz": null}"#, mk_foo_bar_enum_type, |de| {
+        let err = de.unwrap_err();
         assert_eq!(
             err,
-            r#"unknown enum case `baz`, expected one of `["foo", "bar"]`"#
+            r#"invalid value: string "baz", expected one of `["foo", "bar"]` at line 1 column 6"#
         );
     })
 }
 
 #[test]
 fn flags_array() {
-    with_deserializer(r#"[true, false, false, true]"#, |mut de| {
-        let ty = de.flags_type(&["a".into(), "b".into(), "c".into(), "d".into()]);
-        let v = de.deserialize_flags(ty).unwrap();
-        assert_eq!(v, 0b1001);
-    })
+    with_deserializer(
+        r#"[true, false, false, true]"#,
+        mk_a_b_c_d_flags_type,
+        |de| {
+            let de = de.unwrap();
+            let v = de.unwrap_flags();
+            assert_eq!(v, 0b1001);
+        },
+    )
 }
 
 #[test]
 fn flags_empty_array() {
-    with_deserializer(r#"[]"#, |mut de| {
-        let ty = de.flags_type(&["a".into(), "b".into(), "c".into(), "d".into()]);
-        let v = de.deserialize_flags(ty).unwrap();
+    with_deserializer(r#"[]"#, mk_a_b_c_d_flags_type, |de| {
+        let de = de.unwrap();
+        let v = de.unwrap_flags();
         assert_eq!(v, 0);
     })
 }
 
 #[test]
 fn flags_unknown_array() {
-    with_deserializer(r#"[true, false, false, true, true]"#, |mut de| {
-        let ty = de.flags_type(&["a".into(), "b".into(), "c".into(), "d".into()]);
-        let err = de.deserialize_flags(ty).unwrap_err();
-        assert_eq!(
-            err,
-            "sequence must contain exactly 4 elements at line 1 column 32"
-        );
-    })
+    with_deserializer(
+        r#"[true, false, false, true, true]"#,
+        mk_a_b_c_d_flags_type,
+        |de| {
+            let err = de.unwrap_err();
+            assert_eq!(
+                err,
+                "sequence must contain exactly 4 elements at line 1 column 32"
+            );
+        },
+    )
 }
 
 #[test]
 fn flags_object() {
-    with_deserializer(r#"{"d": true, "a": true}"#, |mut de| {
-        let ty = de.flags_type(&["a".into(), "b".into(), "c".into(), "d".into()]);
-        let v = de.deserialize_flags(ty).unwrap();
+    with_deserializer(r#"{"d": true, "a": true}"#, mk_a_b_c_d_flags_type, |de| {
+        let de = de.unwrap();
+        let v = de.unwrap_flags();
         assert_eq!(v, 0b1001);
     })
 }
 
 #[test]
 fn flags_empty_object() {
-    with_deserializer(r#"{}"#, |mut de| {
-        let ty = de.flags_type(&["a".into(), "b".into(), "c".into(), "d".into()]);
-        let v = de.deserialize_flags(ty).unwrap();
+    with_deserializer(r#"{}"#, mk_a_b_c_d_flags_type, |de| {
+        let de = de.unwrap();
+        let v = de.unwrap_flags();
         assert_eq!(v, 0);
     })
 }
 
 #[test]
 fn flags_unknown_object() {
-    with_deserializer(r#"{"d": true, "a": true, "z": false}"#, |mut de| {
-        let ty = de.flags_type(&["a".into(), "b".into(), "c".into(), "d".into()]);
-        let err = de.deserialize_flags(ty).unwrap_err();
-        assert_eq!(err, "unknown case `z` received at line 1 column 34");
-    })
+    with_deserializer(
+        r#"{"d": true, "a": true, "z": false}"#,
+        mk_a_b_c_d_flags_type,
+        |de| {
+            let err = de.unwrap_err();
+            assert_eq!(err, "unknown case `z` received at line 1 column 34");
+        },
+    )
 }
 
 #[test]
 fn option_none() {
-    with_deserializer(r#"null"#, |mut de| {
-        let v = de.deserialize_option(Type::U32).unwrap();
-        assert_eq!(v, None);
+    with_deserializer(r#"null"#, mk_option_u32_type, |de| {
+        let de = de.unwrap();
+        let de = de.unwrap_option();
+        assert!(de.is_none());
     })
 }
 
 #[test]
 fn option_some() {
-    with_deserializer(r#"42"#, |mut de| {
-        let v_de = de.deserialize_option(Type::U32).unwrap().unwrap();
-        let v = u32::deserialize(de.with(v_de)).unwrap();
+    with_deserializer(r#"42"#, mk_option_u32_type, |de| {
+        let de = de.unwrap();
+        let de = de.unwrap_option();
+        let de = de.unwrap();
+        let v = de.unwrap_u32();
         assert_eq!(v, 42);
     })
 }
 
 #[test]
 fn result_string_ok() {
-    with_deserializer(r#""ok""#, |mut de| {
-        let _v_de = de
-            .deserialize_result(None, Some(Type::U32))
-            .unwrap()
-            .unwrap();
-    })
+    with_deserializer(
+        r#""ok""#,
+        |store, de| {
+            let ty = de
+                .result_type()
+                .call_constructor(store, None, Some(Type::U32))
+                .unwrap();
+            Type::Result(ty)
+        },
+        |de| {
+            let de = de.unwrap();
+            let de = de.unwrap_result();
+            let de = de.unwrap();
+            assert!(de.is_none());
+        },
+    )
 }
 
 #[test]
 fn result_string_err() {
-    with_deserializer(r#""err""#, |mut de| {
-        let _v_de = de
-            .deserialize_result(Some(Type::U32), None)
-            .unwrap()
-            .unwrap_err();
-    })
+    with_deserializer(
+        r#""err""#,
+        |store, de| {
+            let ty = de
+                .result_type()
+                .call_constructor(store, Some(Type::U32), None)
+                .unwrap();
+            Type::Result(ty)
+        },
+        |de| {
+            let de = de.unwrap();
+            let de = de.unwrap_result();
+            let de = de.unwrap_err();
+            assert!(de.is_none());
+        },
+    )
 }
 
 #[test]
 fn result_payload_ok() {
-    with_deserializer(r#"{"ok": 42}"#, |mut de| {
-        let v_de = de
-            .deserialize_result(Some(Type::U32), Some(Type::U32))
-            .unwrap()
-            .unwrap();
-        let v = u32::deserialize(de.with(v_de)).unwrap();
-        assert_eq!(v, 42);
-    })
+    with_deserializer(
+        r#"{"ok": 42}"#,
+        |store, de| {
+            let ty = de
+                .result_type()
+                .call_constructor(store, Some(Type::U32), Some(Type::U32))
+                .unwrap();
+            Type::Result(ty)
+        },
+        |de| {
+            let de = de.unwrap();
+            let de = de.unwrap_result();
+            let de = de.unwrap();
+            let de = de.unwrap();
+            let v = de.unwrap_u32();
+            assert_eq!(v, 42);
+        },
+    )
 }
 
 #[test]
 fn result_payload_err() {
-    with_deserializer(r#"{"err": 42}"#, |mut de| {
-        let v_de = de
-            .deserialize_result(Some(Type::U32), Some(Type::U32))
-            .unwrap()
-            .unwrap_err();
-        let v = u32::deserialize(de.with(v_de)).unwrap();
-        assert_eq!(v, 42);
-    })
+    with_deserializer(
+        r#"{"err": 42}"#,
+        |store, de| {
+            let ty = de
+                .result_type()
+                .call_constructor(store, Some(Type::U32), Some(Type::U32))
+                .unwrap();
+            Type::Result(ty)
+        },
+        |de| {
+            let de = de.unwrap();
+            let de = de.unwrap_result();
+            let de = de.unwrap_err();
+            let de = de.unwrap();
+            let v = de.unwrap_u32();
+            assert_eq!(v, 42);
+        },
+    )
 }
 
 #[test]
@@ -664,298 +717,333 @@ fn record_complex() {
       "k": {"ok": ["ok", {"ok": null}]},
       "l": {"err": ["err", {"err": null}]}
     }"#;
-    with_deserializer(PAYLOAD, |mut de| {
-        let empty_result = de.result_type(None, None);
+    with_deserializer(
+        PAYLOAD,
+        |mut store, de| {
+            let empty_result = de
+                .result_type()
+                .call_constructor(&mut store, None, None)
+                .unwrap();
 
-        let d_b_ty = de.list_type(Type::String);
-        let d_c_ty = de.flags_type(&["foo".into(), "bar".into(), "baz".into()]);
-        let b_ty = de.tuple_type(&[
-            Type::U8,
-            Type::U16,
-            Type::U32,
-            Type::U64,
-            Type::S8,
-            Type::S16,
-            Type::S32,
-            Type::S64,
-            Type::F32,
-            Type::F64,
-        ]);
-        let d_ty = de.record_type(&[
-            ("d_a".into(), Type::Bytes),
-            ("d_b".into(), Type::List(d_b_ty)),
-            ("d_c".into(), Type::Flags(d_c_ty)),
-        ]);
-        let f_ty = de.variant_type(&[("none".into(), None), ("some".into(), Some(Type::String))]);
-        let g_ty = f_ty;
-        let h_ty = de.enum_type(&["no".into(), "yes".into()]);
-        let i_ty = de.flags_type(&["foo".into(), "bar".into(), "baz".into()]);
-        let j_ty = de.option_type(Type::Char);
-        let k_ok_ty = de.tuple_type(&[Type::Result(empty_result), Type::Result(empty_result)]);
-        let k_ty = de.result_type(Some(Type::Tuple(k_ok_ty)), None);
-        let l_err_ty = k_ok_ty;
-        let l_ty = de.result_type(Some(Type::Tuple(l_err_ty)), None);
+            let d_c_ty = de
+                .flags_type()
+                .call_constructor(&mut store, &["foo".into(), "bar".into(), "baz".into()])
+                .unwrap();
+            let b_ty = de
+                .tuple_type()
+                .call_constructor(
+                    &mut store,
+                    &[
+                        Type::U8,
+                        Type::U16,
+                        Type::U32,
+                        Type::U64,
+                        Type::S8,
+                        Type::S16,
+                        Type::S32,
+                        Type::S64,
+                        Type::F32,
+                        Type::F64,
+                    ],
+                )
+                .unwrap();
+            let d_ty = de
+                .record_type()
+                .call_constructor(
+                    &mut store,
+                    &[
+                        ("d_a".into(), Type::List(ListType::U8)),
+                        ("d_b".into(), Type::List(ListType::String)),
+                        ("d_c".into(), Type::Flags(d_c_ty)),
+                    ],
+                )
+                .unwrap();
+            let f_ty = de
+                .variant_type()
+                .call_constructor(
+                    &mut store,
+                    &[("none".into(), None), ("some".into(), Some(Type::String))],
+                )
+                .unwrap();
+            let g_ty = f_ty;
+            let h_ty = de
+                .enum_type()
+                .call_constructor(&mut store, &["no".into(), "yes".into()])
+                .unwrap();
+            let i_ty = de
+                .flags_type()
+                .call_constructor(&mut store, &["foo".into(), "bar".into(), "baz".into()])
+                .unwrap();
+            let j_ty = de
+                .option_type()
+                .call_constructor(&mut store, Type::Char)
+                .unwrap();
+            let k_ok_ty = de
+                .tuple_type()
+                .call_constructor(
+                    &mut store,
+                    &[Type::Result(empty_result), Type::Result(empty_result)],
+                )
+                .unwrap();
+            let k_ty = de
+                .result_type()
+                .call_constructor(&mut store, Some(Type::Tuple(k_ok_ty)), None)
+                .unwrap();
+            let l_err_ty = k_ok_ty;
+            let l_ty = de
+                .result_type()
+                .call_constructor(&mut store, None, Some(Type::Tuple(l_err_ty)))
+                .unwrap();
 
-        let ty = de.record_type(&[
-            ("a".into(), Type::Bool),
-            ("b".into(), Type::Tuple(b_ty)),
-            ("c".into(), Type::String),
-            ("d".into(), Type::Record(d_ty)),
-            ("e".into(), Type::Char),
-            ("f".into(), Type::Variant(f_ty)),
-            ("g".into(), Type::Variant(g_ty)),
-            ("h".into(), Type::Enum(h_ty)),
-            ("i".into(), Type::Flags(i_ty)),
-            ("j".into(), Type::Option(j_ty)),
-            ("k".into(), Type::Result(k_ty)),
-            ("l".into(), Type::Result(l_ty)),
-        ]);
-        let (idx, v_de, fields) = de.deserialize_record(ty).unwrap();
+            let ty = de
+                .record_type()
+                .call_constructor(
+                    store,
+                    &[
+                        ("a".into(), Type::Bool),
+                        ("b".into(), Type::Tuple(b_ty)),
+                        ("c".into(), Type::String),
+                        ("d".into(), Type::Record(d_ty)),
+                        ("e".into(), Type::Char),
+                        ("f".into(), Type::Variant(f_ty)),
+                        ("g".into(), Type::Variant(g_ty)),
+                        ("h".into(), Type::Enum(h_ty)),
+                        ("i".into(), Type::Flags(i_ty)),
+                        ("j".into(), Type::Option(j_ty)),
+                        ("k".into(), Type::Result(k_ty)),
+                        ("l".into(), Type::Result(l_ty)),
+                    ],
+                )
+                .unwrap();
+            Type::Record(ty)
+        },
+        |de| {
+            let Deserializer {
+                store,
+                reflect,
+                value,
+                ..
+            } = de.unwrap();
+            let mut fields = value.unwrap_record(store, reflect);
+            fields.reverse();
 
-        // "a"
-        {
-            assert_eq!(idx, 0);
-            let v = bool::deserialize(de.with(v_de)).unwrap();
-            assert_eq!(v, true);
-        }
-
-        let mut de = RecordIter(de.with(fields));
-
-        // "b"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 1);
-
-            let (v_de, els) = de.0.with(v_de).deserialize_tuple(b_ty).unwrap();
-            let v = u8::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, 0);
-
-            let mut de = TupleIter(de.0.with(els));
-
-            let v_de = de.next().unwrap();
-            let v = u16::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, 1);
-
-            let v_de = de.next().unwrap();
-            let v = u32::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, 2);
-
-            let v_de = de.next().unwrap();
-            let v = u64::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, 3);
-
-            let v_de = de.next().unwrap();
-            let v = i8::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, -4);
-
-            let v_de = de.next().unwrap();
-            let v = i16::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, -5);
-
-            let v_de = de.next().unwrap();
-            let v = i32::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, -6);
-
-            let v_de = de.next().unwrap();
-            let v = i64::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, -7);
-
-            let v_de = de.next().unwrap();
-            let v = f32::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, 8.1);
-
-            let v_de = de.next().unwrap();
-            let v = f64::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, 9.2);
-        }
-
-        // "c"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 2);
-            let v = String::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, "test");
-        }
-
-        // "d"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 3);
-
-            let (idx, v_de, fields) = de.0.with(v_de).deserialize_record(d_ty).unwrap();
-
-            // "d_a"
+            // "a"
             {
-                assert_eq!(idx, 0);
-                let v = <Vec<u8>>::deserialize(de.0.with(v_de)).unwrap();
-                assert_eq!(v, b"bytes");
+                let v = fields.pop().unwrap().unwrap_bool();
+                assert!(v);
             }
 
-            let mut de = RecordIter(de.0.with(fields));
-
-            // "d_b"
+            // "b"
             {
-                let (idx, v_de) = de.next().unwrap();
-                assert_eq!(idx, 1);
+                let mut values = fields.pop().unwrap().unwrap_tuple(store, reflect);
+                values.reverse();
 
-                let vs = de.0.with(v_de).deserialize_list_flat::<String>().unwrap();
-                assert_eq!(vs, ["foo", "bar", "baz"])
+                let v = values.pop().unwrap().unwrap_u8();
+                assert_eq!(v, 0);
+
+                let v = values.pop().unwrap().unwrap_u16();
+                assert_eq!(v, 1);
+
+                let v = values.pop().unwrap().unwrap_u32();
+                assert_eq!(v, 2);
+
+                let v = values.pop().unwrap().unwrap_u64();
+                assert_eq!(v, 3);
+
+                let v = values.pop().unwrap().unwrap_s8();
+                assert_eq!(v, -4);
+
+                let v = values.pop().unwrap().unwrap_s16();
+                assert_eq!(v, -5);
+
+                let v = values.pop().unwrap().unwrap_s32();
+                assert_eq!(v, -6);
+
+                let v = values.pop().unwrap().unwrap_s64();
+                assert_eq!(v, -7);
+
+                let v = values.pop().unwrap().unwrap_f32();
+                assert_eq!(v, 8.1);
+
+                let v = values.pop().unwrap().unwrap_f64();
+                assert_eq!(v, 9.2);
             }
 
-            // "d_c"
+            // "c"
             {
-                let (idx, v_de) = de.next().unwrap();
-                assert_eq!(idx, 2);
-                let v = de.0.with(v_de).deserialize_flags(d_c_ty).unwrap();
-                assert_eq!(v, 0b000)
+                let v = fields.pop().unwrap().unwrap_string();
+                assert_eq!(v, "test");
             }
-        }
 
-        // "e"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 4);
-            let v = char::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, '🌍');
-        }
+            // "d"
+            {
+                let mut fields = fields.pop().unwrap().unwrap_record(store, reflect);
+                fields.reverse();
 
-        // "f"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 5);
-            let (idx, _v_de) = de.0.with(v_de).deserialize_variant(f_ty).unwrap();
-            assert_eq!(idx, 0);
-        }
+                // "d_a"
+                {
+                    let v = fields.pop().unwrap().unwrap_list_u8();
+                    assert_eq!(v, b"bytes");
+                }
 
-        // "g"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 6);
-            let (idx, v_de) = de.0.with(v_de).deserialize_variant(g_ty).unwrap();
-            assert_eq!(idx, 1);
-            let v = String::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, "test");
-        }
+                // "d_b"
+                {
+                    let v = fields.pop().unwrap().unwrap_list_string();
+                    assert_eq!(v, ["foo", "bar", "baz"])
+                }
 
-        // "h"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 7);
-            let idx = de.0.with(v_de).deserialize_enum(h_ty).unwrap();
-            assert_eq!(idx, 1);
-        }
+                // "d_c"
+                {
+                    let v = fields.pop().unwrap().unwrap_flags();
+                    assert_eq!(v, 0b000)
+                }
+            }
 
-        // "i"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 8);
-            let v = de.0.with(v_de).deserialize_flags(i_ty).unwrap();
-            assert_eq!(v, 0b010);
-        }
+            // "e"
+            {
+                let v = fields.pop().unwrap().unwrap_char();
+                assert_eq!(v, '🌍');
+            }
 
-        // "j"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 9);
-            let v = de.0.with(v_de).deserialize_option(Type::Char).unwrap();
-            assert_eq!(v, None);
-        }
+            // "f"
+            {
+                let (c, v) = fields.pop().unwrap().unwrap_variant(store, reflect);
+                assert_eq!(c, 0);
+                assert!(v.is_none());
+            }
 
-        // "k"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 10);
-            let v_de =
-                de.0.with(v_de)
-                    .deserialize_result(Some(Type::Tuple(k_ok_ty)), None)
+            // "g"
+            {
+                let (c, v) = fields.pop().unwrap().unwrap_variant(store, reflect);
+                assert_eq!(c, 1);
+                let v = v.unwrap().unwrap_string();
+                assert_eq!(v, "test");
+            }
+
+            // "h"
+            {
+                let c = fields.pop().unwrap().unwrap_enum();
+                assert_eq!(c, 1);
+            }
+
+            // "i"
+            {
+                let v = fields.pop().unwrap().unwrap_flags();
+                assert_eq!(v, 0b010);
+            }
+
+            // "j"
+            {
+                let v = fields.pop().unwrap().unwrap_option(store, reflect);
+                assert!(v.is_none());
+            }
+
+            // "k"
+            {
+                let v = fields
+                    .pop()
+                    .unwrap()
+                    .unwrap_result(store, reflect)
                     .unwrap()
                     .unwrap();
-            let (v_de, els) = de.0.with(v_de).deserialize_tuple(k_ok_ty).unwrap();
-            de.0.with(v_de)
-                .deserialize_result(None, None)
-                .unwrap()
-                .unwrap();
+                let mut values = v.unwrap_tuple(store, reflect);
+                let v = values.pop().unwrap().unwrap_result(store, reflect).unwrap();
+                assert!(v.is_none());
 
-            let mut de = TupleIter(de.0.with(els));
+                let v = values.pop().unwrap().unwrap_result(store, reflect).unwrap();
+                assert!(v.is_none());
+            }
 
-            let v_de = de.next().unwrap();
-            de.0.with(v_de)
-                .deserialize_result(None, None)
-                .unwrap()
-                .unwrap();
-        }
-
-        // "l"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 11);
-            let v_de =
-                de.0.with(v_de)
-                    .deserialize_result(None, Some(Type::Tuple(l_err_ty)))
+            // "l"
+            {
+                let v = fields
+                    .pop()
                     .unwrap()
+                    .unwrap_result(store, reflect)
+                    .unwrap_err()
+                    .unwrap();
+                let mut values = v.unwrap_tuple(store, reflect);
+                let v = values
+                    .pop()
+                    .unwrap()
+                    .unwrap_result(store, reflect)
                     .unwrap_err();
-            let (v_de, els) = de.0.with(v_de).deserialize_tuple(l_err_ty).unwrap();
-            de.0.with(v_de)
-                .deserialize_result(None, None)
-                .unwrap()
-                .unwrap_err();
+                assert!(v.is_none());
 
-            let mut de = TupleIter(de.0.with(els));
-
-            let v_de = de.next().unwrap();
-            de.0.with(v_de)
-                .deserialize_result(None, None)
-                .unwrap()
-                .unwrap_err();
-        }
-    })
+                let v = values
+                    .pop()
+                    .unwrap()
+                    .unwrap_result(store, reflect)
+                    .unwrap_err();
+                assert!(v.is_none());
+            }
+        },
+    )
 }
 
 #[test]
 fn record_out_of_order() {
-    with_deserializer(r#"{"c": 0, "a": 1, "b": 2}"#, |mut de| {
-        let ty = de.record_type(&[
-            ("a".into(), Type::U8),
-            ("b".into(), Type::U8),
-            ("c".into(), Type::U8),
-        ]);
-        let (idx, v_de, fields) = de.deserialize_record(ty).unwrap();
+    with_deserializer(
+        r#"{"c": 0, "a": 1, "b": 2}"#,
+        |store, de| {
+            let ty = de
+                .record_type()
+                .call_constructor(
+                    store,
+                    &[
+                        ("a".into(), Type::U8),
+                        ("b".into(), Type::U8),
+                        ("c".into(), Type::U8),
+                    ],
+                )
+                .unwrap();
+            Type::Record(ty)
+        },
+        |de| {
+            let de = de.unwrap();
+            let (Deserializer { value, .. }, mut fields) = de.unwrap_record();
 
-        // "a"
-        {
-            assert_eq!(idx, 0);
-            let v = u8::deserialize(de.with(v_de)).unwrap();
-            assert_eq!(v, 1);
-        }
+            // "a"
+            {
+                let v = value.unwrap_u8();
+                assert_eq!(v, 1);
+            }
 
-        let mut de = RecordIter(de.with(fields));
+            // "b"
+            {
+                let v = fields.pop().unwrap().unwrap_u8();
+                assert_eq!(v, 2);
+            }
 
-        // "b"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 1);
-            let v = u8::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, 2);
-        }
-
-        // "c"
-        {
-            let (idx, v_de) = de.next().unwrap();
-            assert_eq!(idx, 2);
-            let v = u8::deserialize(de.0.with(v_de)).unwrap();
-            assert_eq!(v, 0);
-        }
-    })
+            // "c"
+            {
+                let v = fields.pop().unwrap().unwrap_u8();
+                assert_eq!(v, 0);
+            }
+        },
+    )
 }
 
 #[test]
 fn record_invalid() {
-    with_deserializer("0", |mut de| {
-        let ty = de.record_type(&[("foo".into(), Type::U8), ("bar".into(), Type::String)]);
-        let err = de.deserialize_record(ty).unwrap_err();
-        assert_eq!(
-            err,
-            r#"invalid type: integer `0`, expected a record with fields: [("foo", U8), ("bar", String)] at line 1 column 1"#
-        );
-    })
+    with_deserializer(
+        "0",
+        |store, de| {
+            let ty = de
+                .record_type()
+                .call_constructor(
+                    store,
+                    &[("foo".into(), Type::U8), ("bar".into(), Type::String)],
+                )
+                .unwrap();
+            Type::Record(ty)
+        },
+        |de| {
+            let err = de.unwrap_err();
+            assert_eq!(
+                err,
+                r#"invalid type: integer `0`, expected record with fields: [("foo", U8), ("bar", String)] at line 1 column 1"#
+            );
+        },
+    )
 }

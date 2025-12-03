@@ -9,7 +9,7 @@ interface reflect {
         constructor(cases: list<tuple<string, option<%type>>>);
     }
 
-    resource list-type {
+    resource list-of-lists-type {
         constructor(%type: %type);
     }
 
@@ -33,6 +33,30 @@ interface reflect {
         constructor(ok: option<%type>, err: option<%type>);
     }
 
+    variant list-type {
+        %bool,
+        %u8,
+        %s8,
+        %u16,
+        %s16,
+        %u32,
+        %s32,
+        %u64,
+        %s64,
+        %f32,
+        %f64,
+        %char,
+        %string,
+        %record(borrow<record-type>),
+        %variant(borrow<variant-type>),
+        %list(list-of-lists-type), // FIXME: this should use `borrow<list-of-lists>`, but that breaks `wit-bindgen`
+        %tuple(borrow<tuple-type>),
+        %flags(borrow<flags-type>),
+        %enum(borrow<enum-type>),
+        %option(borrow<option-type>),
+        %result(borrow<result-type>),
+     }
+
     variant %type {
         %bool,
         %u8,
@@ -46,110 +70,110 @@ interface reflect {
         %f32,
         %f64,
         %char,
-        bytes,
         %string,
         %record(borrow<record-type>),
         %variant(borrow<variant-type>),
-        %list(borrow<list-type>),
+        %list(list-type),
         %tuple(borrow<tuple-type>),
         %flags(borrow<flags-type>),
         %enum(borrow<enum-type>),
         %option(borrow<option-type>),
         %result(borrow<result-type>),
     }
+
+    resource record-value {
+        constructor(fields: list<value>);
+        into-value: static func(this: record-value) -> list<value>;
+    }
+
+    resource variant-value {
+        constructor(discriminant: u32, payload: option<value>);
+        into-value: static func(this: variant-value) -> tuple<u32, option<value>>;
+    }
+
+    resource tuple-value {
+        constructor(elements: list<value>);
+        into-value: static func(this: tuple-value) -> list<value>;
+    }
+
+    resource option-value {
+        constructor(value: option<value>);
+        into-value: static func(this: option-value) -> option<value>;
+    }
+
+    resource result-value {
+        constructor(value: result<option<value>, option<value>>);
+        into-value: static func(this: result-value) -> result<option<value>, option<value>>;
+    }
+
+    resource list-of-lists-value {
+        constructor(lists: list<%list>);
+        into-list: static func(this: list-of-lists-value) -> list<%list>;
+    }
+
+    variant %list {
+        %bool(list<bool>),
+        %u8(list<u8>),
+        %s8(list<s8>),
+        %u16(list<u16>),
+        %s16(list<s16>),
+        %u32(list<u32>),
+        %s32(list<s32>),
+        %u64(list<u64>),
+        %s64(list<s64>),
+        %f32(list<f32>),
+        %f64(list<f64>),
+        %char(list<char>),
+        %string(list<string>),
+        %record(list<record-value>),
+        %variant(list<variant-value>),
+        %list(list-of-lists-value),
+        %tuple(list<tuple-value>),
+        %flags(list<u32>),
+        %enum(list<u32>),
+        %option(list<option-value>),
+        %result(list<result-value>),
+    }
+
+    variant value {
+        %bool(bool),
+        %u8(u8),
+        %s8(s8),
+        %u16(u16),
+        %s16(s16),
+        %u32(u32),
+        %s32(s32),
+        %u64(u64),
+        %s64(s64),
+        %f32(f32),
+        %f64(f64),
+        %char(char),
+        %string(string),
+        %record(record-value),
+        %variant(variant-value),
+        %list(%list),
+        %tuple(tuple-value),
+        %flags(u32),
+        %enum(u32),
+        %option(option-value),
+        %result(result-value),
+    }
 }
 
-
 interface deserializer {
-    use reflect.{record-type, variant-type, list-type, tuple-type, flags-type, enum-type, option-type, result-type, %type};
+    use reflect.{record-type, variant-type, list-type, tuple-type, flags-type, enum-type, option-type, result-type, %type, value};
 
     resource error {
         to-string: func() -> string;
     }
 
-    resource tuple-deserializer {
-        next: static func(this: tuple-deserializer) -> tuple<deserializer, tuple-deserializer>;
-    }
-
-    resource record-deserializer {
-        next: static func(this: record-deserializer) -> tuple<u32, deserializer, record-deserializer>;
-    }
-
-    resource list-deserializer {
-        next: static func(this: list-deserializer) -> option<tuple<deserializer, list-deserializer>>;
-    }
-
-    resource deserializer {
-        from-list: static func(buf: list<u8>) -> deserializer;
-
-        deserialize-bool: static func(this: deserializer) -> result<bool, error>;
-        deserialize-u8: static func(this: deserializer) -> result<u8, error>;
-        deserialize-s8: static func(this: deserializer) -> result<s8, error>;
-        deserialize-u16: static func(this: deserializer) -> result<u16, error>;
-        deserialize-s16: static func(this: deserializer) -> result<s16, error>;
-        deserialize-u32: static func(this: deserializer) -> result<u32, error>;
-        deserialize-s32: static func(this: deserializer) -> result<s32, error>;
-        deserialize-u64: static func(this: deserializer) -> result<u64, error>;
-        deserialize-s64: static func(this: deserializer) -> result<s64, error>;
-        deserialize-f32: static func(this: deserializer) -> result<f32, error>;
-        deserialize-f64: static func(this: deserializer) -> result<f64, error>;
-        deserialize-char: static func(this: deserializer) -> result<char, error>;
-        deserialize-bytes: static func(this: deserializer) -> result<list<u8>, error>;
-        deserialize-string: static func(this: deserializer) -> result<string, error>;
-        deserialize-record: static func(this: deserializer, %type: borrow<record-type>) -> result<tuple<u32, deserializer, record-deserializer>, error>;
-        deserialize-variant: static func(this: deserializer, %type: borrow<variant-type>) -> result<tuple<u32, deserializer>, error>;
-        deserialize-list: static func(this: deserializer, %type: %type) -> result<list-deserializer, error>;
-        deserialize-tuple: static func(this: deserializer, %type: borrow<tuple-type>) -> result<tuple<deserializer, tuple-deserializer>, error>;
-        deserialize-flags: static func(this: deserializer, %type: borrow<flags-type>) -> result<u32, error>;
-        deserialize-enum: static func(this: deserializer, %type: borrow<enum-type>) -> result<u32, error>;
-        deserialize-option: static func(this: deserializer, %type: %type) -> result<option<deserializer>, error>;
-        deserialize-result: static func(this: deserializer, ok: option<%type>, err: option<%type>) -> result<result<deserializer, deserializer>, error>;
-    }
+    from-list: func(buf: list<u8>, %type: %type) -> result<value, error>;
 }
 
 interface serializer {
-    use reflect.{record-type, variant-type, list-type, tuple-type, flags-type, enum-type, option-type, result-type, %type};
+    use reflect.{value};
 
-    resource tuple-serializer {
-        next: static func(this: tuple-serializer) -> tuple<serializer, tuple-serializer>;
-    }
-
-    resource record-serializer {
-        next: static func(this: record-serializer) -> tuple<serializer, record-serializer>;
-    }
-
-    resource list-serializer {
-        next: static func(this: list-serializer) -> tuple<serializer, list-serializer>;
-    }
-
-    resource serializer {
-        constructor();
-
-        serialize-bool: static func(this: serializer, v: bool);
-        serialize-u8: static func(this: serializer, v: u8);
-        serialize-s8: static func(this: serializer, v: s8);
-        serialize-u16: static func(this: serializer, v: u16);
-        serialize-s16: static func(this: serializer, v: s16);
-        serialize-u32: static func(this: serializer, v: u32);
-        serialize-s32: static func(this: serializer, v: s32);
-        serialize-u64: static func(this: serializer, v: u64);
-        serialize-s64: static func(this: serializer, v: s64);
-        serialize-f32: static func(this: serializer, v: f32);
-        serialize-f64: static func(this: serializer, v: f64);
-        serialize-char: static func(this: serializer, v: char);
-        serialize-bytes: static func(this: serializer, v: list<u8>);
-        serialize-string: static func(this: serializer, v: string);
-        serialize-record: static func(this: serializer, %type: borrow<record-type>) -> tuple<serializer, record-serializer>;
-        serialize-variant: static func(this: serializer, %type: borrow<variant-type>, case: u32) -> serializer;
-        serialize-list: static func(this: serializer, %type: %type, n: option<u32>) -> list-serializer;
-        serialize-tuple: static func(this: serializer, n: u32) -> tuple<serializer, tuple-serializer>;
-        serialize-flags: static func(this: serializer, %type: borrow<flags-type>, v: u32);
-        serialize-enum: static func(this: serializer, %type: borrow<enum-type>, v: u32);
-        serialize-none: static func(this: serializer);
-        serialize-some: static func(this: serializer, %type: %type) -> serializer;
-        serialize-ok: static func(this: serializer, %type: option<%type>) -> serializer;
-        serialize-err: static func(this: serializer, %type: option<%type>) -> serializer;
-    }
+    from-value: func(value: value) -> list<u8>;
 }
 
 world imports {

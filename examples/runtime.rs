@@ -4,11 +4,11 @@ mod bindings {
     });
 }
 
-use core::mem;
+use core::iter::zip;
 
 use anyhow::{Context as _, anyhow, bail, ensure};
-use wasmtime::component::types::{self, Field};
-use wasmtime::component::{Component, Func, Instance, Linker, ResourceAny, Type, Val};
+use wasmtime::component::types;
+use wasmtime::component::{Component, Func, Instance, Linker, Type, Val};
 use wasmtime::{AsContextMut, Engine, Store};
 use wit_component::ComponentEncoder;
 
@@ -35,265 +35,64 @@ fn mk_flatten_result<T>(
     |res| try_flatten_result(store, instance, res)
 }
 
-fn deserialize(
-    store: &mut Store<()>,
-    de: ResourceAny,
-    instance: &bindings::Format,
+fn unwrap_val(
+    mut store: &mut Store<()>,
+    v: reflect::Value,
+    instance: &reflect::Guest,
     ty: Type,
-    v: &mut Val,
-) -> wasmtime::Result<()> {
-    let de = match ty {
-        Type::Bool => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_bool(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::Bool)?,
-        Type::S8 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_s8(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::S8)?,
-        Type::U8 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_u8(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::U8)?,
-        Type::S16 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_s16(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::S16)?,
-        Type::U16 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_u16(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::U16)?,
-        Type::S32 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_s32(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::S32)?,
-        Type::U32 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_u32(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::U32)?,
-        Type::S64 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_s64(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::S64)?,
-        Type::U64 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_u64(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::U64)?,
-        Type::Float32 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_f32(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::Float32)?,
-        Type::Float64 => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_f64(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::Float64)?,
-        Type::Char => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_char(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::Char)?,
-        Type::String => instance
-            .rvolosatovs_serde_deserializer()
-            .deserializer()
-            .call_deserialize_string(&mut *store, de)
-            .and_then(mk_flatten_result(
-                store,
-                instance.rvolosatovs_serde_deserializer(),
-            ))
-            .map(Val::String)?,
-        #[expect(unused, reason = "incomplete")]
-        Type::List(ty) => todo!(),
-        Type::Record(ty) => {
-            let reflect_tys = ty
-                .fields()
-                .into_iter()
-                .map(|types::Field { name, ty }| {
-                    make_reflect_ty(store, instance.rvolosatovs_serde_reflect(), ty)
-                        .map(|ty| (name.into(), ty))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            let reflect_ty = instance
-                .rvolosatovs_serde_reflect()
-                .record_type()
-                .call_constructor(&mut *store, &reflect_tys)?;
-            let mut names = ty
-                .fields()
-                .map(|Field { name, .. }| name.into())
-                .collect::<Vec<_>>();
-            let tys = ty.fields().map(|Field { ty, .. }| ty).collect::<Vec<_>>();
-            let (mut idx, mut de, mut iter) = instance
-                .rvolosatovs_serde_deserializer()
-                .deserializer()
-                .call_deserialize_record(&mut *store, de, reflect_ty)
-                .and_then(mk_flatten_result(
-                    &mut *store,
-                    instance.rvolosatovs_serde_deserializer(),
-                ))?;
-            let num_fields = ty.fields().len();
-            let mut vs = Vec::with_capacity(num_fields);
-            let mut fv = Val::Bool(false);
-            deserialize(
-                &mut *store,
-                de,
-                instance,
-                tys[idx as usize].clone(),
-                &mut fv,
-            )
-            .with_context(|| format!("failed to deserialize record field with index `{idx}`"))?;
-            vs.push((idx, fv));
-            for _ in 1..num_fields {
-                let next = instance
-                    .rvolosatovs_serde_deserializer()
-                    .record_deserializer()
-                    .call_next(&mut *store, iter)
-                    .context("failed to call `next`")?;
-                idx = next.0;
-                de = next.1;
-                iter = next.2;
-                let mut fv = Val::Bool(false);
-                deserialize(
-                    &mut *store,
-                    de,
-                    instance,
-                    tys[idx as usize].clone(),
-                    &mut fv,
-                )
-                .with_context(|| {
-                    format!("failed to deserialize record field with index `{idx}`")
-                })?;
-                vs.push((idx, fv));
+) -> wasmtime::Result<Val> {
+    match (v, ty) {
+        (reflect::Value::Bool(v), Type::Bool) => Ok(Val::Bool(v)),
+        (reflect::Value::S8(v), Type::S8) => Ok(Val::S8(v)),
+        (reflect::Value::U8(v), Type::U8) => Ok(Val::U8(v)),
+        (reflect::Value::U16(v), Type::U16) => Ok(Val::U16(v)),
+        (reflect::Value::S16(v), Type::S16) => Ok(Val::S16(v)),
+        (reflect::Value::U32(v), Type::U32) => Ok(Val::U32(v)),
+        (reflect::Value::S32(v), Type::S32) => Ok(Val::S32(v)),
+        (reflect::Value::U64(v), Type::U64) => Ok(Val::U64(v)),
+        (reflect::Value::S64(v), Type::S64) => Ok(Val::S64(v)),
+        (reflect::Value::F32(v), Type::Float32) => Ok(Val::Float32(v)),
+        (reflect::Value::F64(v), Type::Float64) => Ok(Val::Float64(v)),
+        (reflect::Value::Char(v), Type::Char) => Ok(Val::Char(v)),
+        (reflect::Value::String(v), Type::String) => Ok(Val::String(v)),
+        (reflect::Value::Record(v), Type::Record(ty)) => {
+            let values = instance.record_value().call_into_value(&mut store, v)?;
+            ensure!(values.len() == ty.fields().len());
+
+            let mut fields = Vec::with_capacity(values.len());
+            for (types::Field { name, ty }, v) in zip(ty.fields(), values) {
+                let v = unwrap_val(store, v, instance, ty)
+                    .with_context(|| format!("failed to unwrap record field `{name}`"))?;
+                fields.push((name.into(), v));
             }
-            vs.sort_unstable_by(|(l, ..), (r, ..)| l.cmp(r));
-            let vs = vs
-                .into_iter()
-                .map(|(idx, v)| (mem::take(&mut names[idx as usize]), v))
-                .collect();
-            Val::Record(vs)
-        }
-        Type::Tuple(ty) => {
-            let reflect_tys = ty
-                .types()
-                .into_iter()
-                .map(|ty| make_reflect_ty(store, instance.rvolosatovs_serde_reflect(), ty))
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            let reflect_ty = instance
-                .rvolosatovs_serde_reflect()
-                .tuple_type()
-                .call_constructor(&mut *store, &reflect_tys)?;
-            let mut tys = ty.types();
-            let num_elements = tys.len();
-            let (mut de, mut iter) = instance
-                .rvolosatovs_serde_deserializer()
-                .deserializer()
-                .call_deserialize_tuple(&mut *store, de, reflect_ty)
-                .and_then(mk_flatten_result(
-                    &mut *store,
-                    instance.rvolosatovs_serde_deserializer(),
-                ))?;
-            let mut vs = Vec::with_capacity(num_elements);
-            let mut ev = Val::Bool(false);
-            let ty = tys
-                .next()
-                .context("failed to get first tuple element type")?;
-            deserialize(&mut *store, de, instance, ty, &mut ev)
-                .context("failed to deserialize first tuple element")?;
-            vs.push(ev);
-            for ty in tys {
-                let next = instance
-                    .rvolosatovs_serde_deserializer()
-                    .tuple_deserializer()
-                    .call_next(&mut *store, iter)
-                    .context("failed to call `next`")?;
-                de = next.0;
-                iter = next.1;
-                let mut ev = Val::Bool(false);
-                deserialize(&mut *store, de, instance, ty, &mut ev)
-                    .context("failed to deserialize tuple element")?;
-                vs.push(ev);
-            }
-            Val::Tuple(vs)
+            Ok(Val::Record(fields))
         }
         #[expect(unused, reason = "incomplete")]
-        Type::Variant(ty) => todo!(),
+        (reflect::Value::Variant(v), Type::Variant(ty)) => todo!(),
         #[expect(unused, reason = "incomplete")]
-        Type::Enum(ty) => todo!(),
+        (reflect::Value::List(v), Type::List(ty)) => todo!(),
+        (reflect::Value::Tuple(v), Type::Tuple(ty)) => {
+            let values = instance.tuple_value().call_into_value(&mut store, v)?;
+            ensure!(values.len() == ty.types().len());
+
+            let mut elems = Vec::with_capacity(values.len());
+            for ((i, ty), v) in zip(ty.types().enumerate(), values) {
+                let v = unwrap_val(store, v, instance, ty)
+                    .with_context(|| format!("failed to unwrap tuple element `{i}`"))?;
+                elems.push(v);
+            }
+            Ok(Val::Tuple(elems))
+        }
         #[expect(unused, reason = "incomplete")]
-        Type::Option(ty) => todo!(),
+        (reflect::Value::Flags(v), Type::Flags(ty)) => todo!(),
         #[expect(unused, reason = "incomplete")]
-        Type::Result(ty) => todo!(),
+        (reflect::Value::Enum(v), Type::Enum(ty)) => todo!(),
         #[expect(unused, reason = "incomplete")]
-        Type::Flags(ty) => todo!(),
+        (reflect::Value::Option(v), Type::Option(ty)) => todo!(),
         #[expect(unused, reason = "incomplete")]
-        Type::Own(ty) => todo!(),
-        #[expect(unused, reason = "incomplete")]
-        Type::Borrow(ty) => todo!(),
-        #[expect(unused, reason = "incomplete")]
-        Type::Future(ty) => todo!(),
-        #[expect(unused, reason = "incomplete")]
-        Type::Stream(ty) => todo!(),
-        Type::ErrorContext => todo!(),
-    };
-    *v = de;
-    Ok(())
+        (reflect::Value::Result(v), Type::Result(ty)) => todo!(),
+        _ => bail!("type mismatch"),
+    }
 }
 
 fn make_reflect_ty(
@@ -315,16 +114,39 @@ fn make_reflect_ty(
         Type::Float64 => Ok(reflect::Type::F64),
         Type::Char => Ok(reflect::Type::Char),
         Type::String => Ok(reflect::Type::String),
-        Type::List(ty) if ty.ty() == Type::U8 => Ok(reflect::Type::Bytes),
         Type::List(ty) => {
-            let ty = make_reflect_ty(store, instance, ty.ty())?;
-            let ty = instance.list_type().call_constructor(store, ty)?;
-            Ok(reflect::Type::List(ty))
+            match ty.ty() {
+                Type::Bool => Ok(reflect::Type::List(reflect::ListType::Bool)),
+                Type::S8 => Ok(reflect::Type::List(reflect::ListType::S8)),
+                Type::U8 => Ok(reflect::Type::List(reflect::ListType::U8)),
+                Type::S16 => Ok(reflect::Type::List(reflect::ListType::S16)),
+                Type::U16 => Ok(reflect::Type::List(reflect::ListType::U16)),
+                Type::S32 => Ok(reflect::Type::List(reflect::ListType::S32)),
+                Type::U32 => Ok(reflect::Type::List(reflect::ListType::U32)),
+                Type::S64 => Ok(reflect::Type::List(reflect::ListType::S64)),
+                Type::U64 => Ok(reflect::Type::List(reflect::ListType::U64)),
+                Type::Float32 => Ok(reflect::Type::List(reflect::ListType::F32)),
+                Type::Float64 => Ok(reflect::Type::List(reflect::ListType::F64)),
+                Type::Char => Ok(reflect::Type::List(reflect::ListType::Char)),
+                Type::String => Ok(reflect::Type::List(reflect::ListType::String)),
+                //Type::List(list) => Ok(reflect::Type::List(reflect::ListType::List)),
+                //Type::Record(record) => Ok(reflect::Type::List(reflect::ListType::Record)),
+                //Type::Tuple(tuple) => Ok(reflect::Type::List(reflect::ListType::Tuple)),
+                //Type::Variant(variant) => Ok(reflect::Type::List(reflect::ListType::Variant)),
+                //Type::Enum(_) => Ok(reflect::Type::List(reflect::ListType::Enum)),
+                //Type::Option(option_type) => Ok(reflect::Type::List(reflect::ListType::Option)),
+                //Type::Result(result_type) => Ok(reflect::Type::List(reflect::ListType::Result)),
+                //Type::Flags(flags) => Ok(reflect::Type::List(reflect::ListType::Flags)),
+                Type::Own(..) | Type::Borrow(..) => bail!("resources not supported"),
+                Type::Future(..) => bail!("futures not supported"),
+                Type::Stream(..) => bail!("streams not supported"),
+                Type::ErrorContext => bail!("error context not supported"),
+                _ => todo!(),
+            }
         }
         Type::Record(ty) => {
             let fields = ty
                 .fields()
-                .into_iter()
                 .map(|types::Field { name, ty }| {
                     make_reflect_ty(store, instance, ty).map(|ty| (name.into(), ty))
                 })
@@ -335,7 +157,6 @@ fn make_reflect_ty(
         Type::Tuple(ty) => {
             let tys = ty
                 .types()
-                .into_iter()
                 .map(|ty| make_reflect_ty(store, instance, ty))
                 .collect::<anyhow::Result<Vec<_>>>()?;
             let ty = instance.tuple_type().call_constructor(store, &tys)?;
@@ -364,62 +185,55 @@ fn make_reflect_ty(
 }
 
 fn deserialize_params(
-    store: &mut Store<()>,
+    mut store: &mut Store<()>,
     instance: &bindings::Format,
     ty: &types::ComponentFunc,
     payload: impl AsRef<[u8]>,
 ) -> wasmtime::Result<Vec<Val>> {
     let payload = payload.as_ref();
-    let mut tys = ty.params();
+    let tys = ty.params();
     let num_params = tys.len();
     if num_params == 0 {
         ensure!(payload.is_empty());
         return Ok(Vec::default());
     }
-    let de = instance
-        .rvolosatovs_serde_deserializer()
-        .deserializer()
-        .call_from_list(&mut *store, payload.as_ref())?;
 
     let reflect_tys = ty
         .params()
-        .into_iter()
         .map(|(_, ty)| make_reflect_ty(store, instance.rvolosatovs_serde_reflect(), ty))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let reflect_ty = instance
         .rvolosatovs_serde_reflect()
         .tuple_type()
-        .call_constructor(&mut *store, &reflect_tys)?;
+        .call_constructor(&mut store, &reflect_tys)?;
 
-    let (mut de, mut iter) = instance
+    let values = instance
         .rvolosatovs_serde_deserializer()
-        .deserializer()
-        .call_deserialize_tuple(&mut *store, de, reflect_ty)
+        .call_from_list(
+            &mut store,
+            payload.as_ref(),
+            reflect::Type::Tuple(reflect_ty),
+        )
         .and_then(mk_flatten_result(
-            &mut *store,
+            &mut store,
             instance.rvolosatovs_serde_deserializer(),
         ))?;
-    let mut vs = Vec::with_capacity(num_params);
+    let reflect::Value::Tuple(values) = values else {
+        bail!("deserialized value is not a tuple");
+    };
+    let values = instance
+        .rvolosatovs_serde_reflect()
+        .tuple_value()
+        .call_into_value(&mut store, values)?;
+    ensure!(values.len() == num_params);
 
-    let mut pv = Val::Bool(false);
-    let (name, ty) = tys.next().context("failed to get first parameter type")?;
-    deserialize(&mut *store, de, instance, ty, &mut pv)
-        .with_context(|| format!("failed to deserialize param `{name}`"))?;
-    vs.push(pv);
-    for (name, ty) in tys {
-        let next = instance
-            .rvolosatovs_serde_deserializer()
-            .tuple_deserializer()
-            .call_next(&mut *store, iter)
-            .context("failed to call `next`")?;
-        de = next.0;
-        iter = next.1;
-        let mut pv = Val::Bool(false);
-        deserialize(&mut *store, de, instance, ty, &mut pv)
-            .with_context(|| format!("failed to deserialize param `{name}`"))?;
-        vs.push(pv);
+    let mut params = Vec::with_capacity(num_params);
+    for ((name, ty), v) in zip(tys, values) {
+        let v = unwrap_val(store, v, instance.rvolosatovs_serde_reflect(), ty)
+            .with_context(|| format!("failed to unwrap param `{name}`"))?;
+        params.push(v);
     }
-    Ok(vs)
+    Ok(params)
 }
 
 fn get_func(
@@ -471,7 +285,7 @@ fn main() -> wasmtime::Result<()> {
     let engine = Engine::default();
 
     let mut app = ComponentEncoder::default().module(include_bytes!(
-        "./app/target/wasm32-unknown-unknown/release/app.wasm"
+        "../target/wasm32-unknown-unknown/release/example_app.wasm"
     ))?;
     let app = app.encode()?;
     let app = Component::new(&engine, app)?;
@@ -481,7 +295,7 @@ fn main() -> wasmtime::Result<()> {
     let app = linker.instantiate(&mut app_store, &app)?;
 
     let mut codec = ComponentEncoder::default().module(include_bytes!(
-        "../json/target/wasm32-unknown-unknown/release/wasm_serde_json.wasm"
+        "../target/wasm32-unknown-unknown/release/wasm_serde_json.wasm"
     ))?;
     let codec = codec.encode()?;
     let codec = Component::new(&engine, codec)?;
@@ -489,8 +303,8 @@ fn main() -> wasmtime::Result<()> {
     let mut codec_store = Store::new(&engine, ());
     let codec = bindings::Format::instantiate(&mut codec_store, &codec, &linker)?;
 
-    let (f, ty) = get_func(&engine, &mut app_store, app, &app_ty, &func).map_err(|err| {
-        eprintln!("exported function `{func}` not found, perhaps you meant one of:");
+    let (f, ty) = get_func(&engine, &mut app_store, app, &app_ty, &func).inspect_err(|err| {
+        eprintln!("exported function `{func}` not found ({err}), perhaps you meant one of:");
         for (name, ty) in app_ty.exports(&engine) {
             match ty {
                 types::ComponentItem::ComponentFunc(..) => {
@@ -507,7 +321,6 @@ fn main() -> wasmtime::Result<()> {
                 _ => continue,
             }
         }
-        err
     })?;
 
     let params = deserialize_params(&mut codec_store, &codec, &ty, payload)?;
