@@ -1,7 +1,22 @@
 [package]
+description = "serde, componentized"
 name = "wasm-serde"
 version = "0.1.0"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[workspace.package]
+authors = ["Roman Volosatovs <rvolosatovs@riseup.net>"]
+categories = ["wasm"]
 edition = "2024"
+homepage = "https://github.com/rvolosatovs/wasm-serde"
+license = "Apache-2.0 WITH LLVM-exception"
+repository = "https://github.com/rvolosatovs/wasm-serde"
 
 [workspace]
 members = ["cbor", "json", "toml", "examples/app"]
