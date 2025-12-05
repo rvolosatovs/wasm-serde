@@ -260,7 +260,7 @@ macro_rules! mk_serialize {
     ($codec:ident) => {
         #[track_caller]
         fn serialize(
-            mk_val: impl core::ops::FnOnce(&mut wasmtime::Store<()>, &crate::bindings::exports::cosmonic::serde::reflect::Guest) -> crate::bindings::exports::cosmonic::serde::reflect::Value,
+            mk_val: impl core::ops::FnOnce(&mut wasmtime::Store<()>, &$crate::bindings::exports::cosmonic::serde::reflect::Guest) -> crate::bindings::exports::cosmonic::serde::reflect::Value,
         ) -> std::vec::Vec<u8> {
             crate::serialize(&$codec, mk_val)
         }
@@ -316,7 +316,7 @@ macro_rules! mk_deserialize {
             payload: impl core::convert::AsRef<[u8]>,
             mk_ty: impl core::ops::FnOnce(
                 &mut wasmtime::Store<()>,
-                &crate::bindings::exports::cosmonic::serde::reflect::Guest,
+                &$crate::bindings::exports::cosmonic::serde::reflect::Guest,
             ) -> crate::bindings::exports::cosmonic::serde::reflect::Type,
             f: impl core::ops::FnOnce(core::result::Result<crate::Value<'_>, std::string::String>) -> T,
         ) -> T {
