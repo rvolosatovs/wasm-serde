@@ -1,4 +1,4 @@
-use crate::bindings::exports::rvolosatovs::serde::reflect::Value;
+use crate::bindings::exports::cosmonic::serde::reflect::Value;
 use crate::{JSON, mk_serialize};
 
 mk_serialize!(JSON);

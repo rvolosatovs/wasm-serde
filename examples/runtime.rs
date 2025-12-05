@@ -12,7 +12,7 @@ use wasmtime::component::{Component, Func, Instance, Linker, Type, Val};
 use wasmtime::{AsContextMut, Engine, Store};
 use wit_component::ComponentEncoder;
 
-use bindings::exports::rvolosatovs::serde::{deserializer, reflect};
+use bindings::exports::cosmonic::serde::{deserializer, reflect};
 
 fn try_flatten_result<T>(
     store: impl AsContextMut,
@@ -200,15 +200,15 @@ fn deserialize_params(
 
     let reflect_tys = ty
         .params()
-        .map(|(_, ty)| make_reflect_ty(store, instance.rvolosatovs_serde_reflect(), ty))
+        .map(|(_, ty)| make_reflect_ty(store, instance.cosmonic_serde_reflect(), ty))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let reflect_ty = instance
-        .rvolosatovs_serde_reflect()
+        .cosmonic_serde_reflect()
         .tuple_type()
         .call_constructor(&mut store, &reflect_tys)?;
 
     let values = instance
-        .rvolosatovs_serde_deserializer()
+        .cosmonic_serde_deserializer()
         .call_from_list(
             &mut store,
             payload.as_ref(),
@@ -216,20 +216,20 @@ fn deserialize_params(
         )
         .and_then(mk_flatten_result(
             &mut store,
-            instance.rvolosatovs_serde_deserializer(),
+            instance.cosmonic_serde_deserializer(),
         ))?;
     let reflect::Value::Tuple(values) = values else {
         bail!("deserialized value is not a tuple");
     };
     let values = instance
-        .rvolosatovs_serde_reflect()
+        .cosmonic_serde_reflect()
         .tuple_value()
         .call_into_value(&mut store, values)?;
     ensure!(values.len() == num_params);
 
     let mut params = Vec::with_capacity(num_params);
     for ((name, ty), v) in zip(tys, values) {
-        let v = unwrap_val(store, v, instance.rvolosatovs_serde_reflect(), ty)
+        let v = unwrap_val(store, v, instance.cosmonic_serde_reflect(), ty)
             .with_context(|| format!("failed to unwrap param `{name}`"))?;
         params.push(v);
     }

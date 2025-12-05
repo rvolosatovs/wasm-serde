@@ -1,4 +1,4 @@
-use crate::bindings::exports::rvolosatovs::serde::reflect::{ListType, Type};
+use crate::bindings::exports::cosmonic::serde::reflect::{ListType, Type};
 use crate::{
     JSON, Value, mk_a_b_c_d_flags_type, mk_deserialize, mk_foo_bar_enum_type,
     mk_foo_bar_variant_type, mk_option_u32_type, mk_record_complex_type,

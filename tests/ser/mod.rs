@@ -1,2 +1,2 @@
-mod toml;
 mod json;
+mod toml;
