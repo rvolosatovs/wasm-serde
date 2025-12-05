@@ -14,9 +14,9 @@ repository.workspace = true
 authors = ["Roman Volosatovs <rvolosatovs@riseup.net>"]
 categories = ["wasm"]
 edition = "2024"
-homepage = "https://github.com/rvolosatovs/wasm-serde"
+homepage = "https://github.com/cosmonic-labs/wasm-serde"
 license = "Apache-2.0 WITH LLVM-exception"
-repository = "https://github.com/rvolosatovs/wasm-serde"
+repository = "https://github.com/cosmonic-labs/wasm-serde"
 
 [workspace]
 members = ["cbor", "json", "toml", "examples/app"]
