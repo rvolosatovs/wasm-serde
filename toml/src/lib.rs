@@ -9,10 +9,10 @@ wasm_serde::bindings::export!(Component with_types_in wasm_serde::bindings);
 impl wasm_serde::Serializer for Component {
     #[inline]
     fn from_value(v: &reflect::Value) -> Vec<u8> {
-        let mut buf = toml::ser::Buffer::new();
-        let ser = toml::Serializer::new(&mut buf);
+        let mut s = String::new();
+        let ser = toml::ser::ValueSerializer::new(&mut s);
         v.serialize(ser).expect("failed to serialize");
-        buf.to_string().into()
+        s.into()
     }
 }
 
@@ -22,7 +22,7 @@ impl wasm_serde::Deserializer for Component {
     #[inline]
     fn from_list(buf: Vec<u8>, ty: wasm_serde::Type) -> Result<reflect::Value, Self::Error> {
         let s = str::from_utf8(&buf).map_err(Self::Error::custom)?;
-        let src = toml::Deserializer::parse(s)?;
+        let src = toml::de::ValueDeserializer::parse(s)?;
         ty.deserialize(src)
     }
 }

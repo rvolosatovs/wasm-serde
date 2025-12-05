@@ -17,7 +17,7 @@ use bindings::exports::rvolosatovs::serde::reflect::{
 use bindings::exports::rvolosatovs::serde::{deserializer, reflect, serializer};
 use serde::de::{DeserializeSeed as _, Error as _, IntoDeserializer as _, VariantAccess as _};
 use serde::ser::SerializeSeq as _;
-use serde::{Deserialize, de, ser};
+use serde::{Deserialize, Serialize, de, ser};
 
 impl<T> reflect::Guest for T {
     type RecordType = RecordType;
@@ -349,7 +349,7 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
                     if fields.len() == i {
                         fields.push(v);
                     } else if fields.len() < i {
-                        fields.resize_with(i, || Value::Bool(false));
+                        fields.resize_with(i, || Value::Option(None.into()));
                         fields.push(v);
                     } else {
                         fields[i] = v;
@@ -577,7 +577,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
                     None
                 };
                 if map
-                    .next_key_seed(VariantDiscriminantVisitor(self.0))?.is_some()
+                    .next_key_seed(VariantDiscriminantVisitor(self.0))?
+                    .is_some()
                 {
                     return Err(A::Error::custom("the object must have exactly one field"));
                 }
@@ -1055,7 +1056,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
                     return Err(A::Error::custom("the object must have exactly one field"));
                 };
                 if map
-                    .next_key_seed(EnumDiscriminantVisitor(self.0))?.is_some()
+                    .next_key_seed(EnumDiscriminantVisitor(self.0))?
+                    .is_some()
                 {
                     return Err(A::Error::custom("the object must have exactly one field"));
                 }
@@ -1728,10 +1730,38 @@ impl ser::Serialize for &ResultValue {
         S: ser::Serializer,
     {
         match &self.0 {
-            Ok(None) => Result::<(), ()>::Ok(()).serialize(serializer),
-            Ok(Some(v)) => Result::<&Value, ()>::Ok(v).serialize(serializer),
-            Err(None) => Result::<(), ()>::Err(()).serialize(serializer),
-            Err(Some(v)) => Result::<(), &Value>::Err(v).serialize(serializer),
+            Ok(None) => {
+                #[derive(Serialize)]
+                #[serde(rename_all = "lowercase")]
+                enum Result {
+                    Ok,
+                }
+                Result::Ok.serialize(serializer)
+            }
+            Ok(Some(v)) => {
+                #[derive(Serialize)]
+                #[serde(rename_all = "lowercase")]
+                enum Result<'a> {
+                    Ok(&'a Value),
+                }
+                Result::Ok(v).serialize(serializer)
+            }
+            Err(None) => {
+                #[derive(Serialize)]
+                #[serde(rename_all = "lowercase")]
+                enum Result {
+                    Err,
+                }
+                Result::Err.serialize(serializer)
+            }
+            Err(Some(v)) => {
+                #[derive(Serialize)]
+                #[serde(rename_all = "lowercase")]
+                enum Result<'a> {
+                    Err(&'a Value),
+                }
+                Result::Err(v).serialize(serializer)
+            }
         }
     }
 }
