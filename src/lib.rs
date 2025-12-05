@@ -9,12 +9,13 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use bindings::exports::cosmonic::serde::reflect::{
+use bindings::exports::cosmonic::reflect::reflect;
+use bindings::exports::cosmonic::reflect::reflect::{
     GuestEnumType, GuestFlagsType, GuestListOfListsType, GuestListOfListsValue, GuestOptionType,
     GuestOptionValue, GuestRecordType, GuestRecordValue, GuestResultType, GuestResultValue,
     GuestTupleType, GuestTupleValue, GuestVariantType, GuestVariantValue, List, Value,
 };
-use bindings::exports::cosmonic::serde::{deserializer, reflect, serializer};
+use bindings::exports::cosmonic::serde::{deserializer, serializer};
 use serde::de::{DeserializeSeed as _, Error as _, IntoDeserializer as _, VariantAccess as _};
 use serde::ser::SerializeSeq as _;
 use serde::{Deserialize, Serialize, de, ser};

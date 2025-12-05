@@ -1,6 +1,6 @@
 use serde_core::Serialize as _;
 use serde_core::de::DeserializeSeed as _;
-use wasm_serde::bindings::exports::cosmonic::serde::reflect;
+use wasm_serde::bindings::exports::cosmonic::reflect::reflect;
 
 struct Component;
 

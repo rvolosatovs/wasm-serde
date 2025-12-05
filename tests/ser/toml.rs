@@ -1,4 +1,4 @@
-use crate::bindings::exports::cosmonic::serde::reflect::Value;
+use crate::bindings::exports::cosmonic::reflect::reflect::Value;
 use crate::{TOML, mk_serialize};
 
 mk_serialize!(TOML);

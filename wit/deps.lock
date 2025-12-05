@@ -1,0 +1,4 @@
+[reflect]
+url = "https://github.com/cosmonic-labs/wasm-reflect/archive/main.tar.gz"
+sha256 = "b640687c8bee8be4d77c16d6bc814ef8423e826fa3348d0a4117b159cb47e7d0"
+sha512 = "21eb2c1a6a4e2994007ae59af8edeee8ce4fbc2805075397050fff3bc50e27c016fbb83e4df764b5db7d209b2b9e4a49e162cdc313bbfa2cb318bfd5c048ff5c"

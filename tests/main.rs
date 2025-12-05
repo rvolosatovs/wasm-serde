@@ -16,8 +16,8 @@ pub mod bindings {
         world: "format",
     });
 }
-use bindings::exports::cosmonic::serde::reflect;
-use bindings::exports::cosmonic::serde::reflect::{List, ListType, Type};
+use bindings::exports::cosmonic::reflect::reflect;
+use bindings::exports::cosmonic::reflect::reflect::{List, ListType, Type};
 
 static BUILD_COMPONENTS: LazyLock<ExitStatus> = LazyLock::new(|| {
     Command::new(env!("CARGO"))
@@ -248,7 +248,7 @@ pub fn serialize(
     let codec = codec
         .instantiate(&mut store)
         .expect("failed to instantiate codec");
-    let val = mk_val(&mut store, codec.cosmonic_serde_reflect());
+    let val = mk_val(&mut store, codec.cosmonic_reflect_reflect());
     codec
         .cosmonic_serde_serializer()
         .call_from_value(&mut store, &val)
@@ -260,7 +260,11 @@ macro_rules! mk_serialize {
     ($codec:ident) => {
         #[track_caller]
         fn serialize(
-            mk_val: impl core::ops::FnOnce(&mut wasmtime::Store<()>, &$crate::bindings::exports::cosmonic::serde::reflect::Guest) -> crate::bindings::exports::cosmonic::serde::reflect::Value,
+            mk_val: impl core::ops::FnOnce(
+                                &mut wasmtime::Store<()>,
+                                &$crate::bindings::exports::cosmonic::reflect::reflect::Guest,
+                            )
+                                -> crate::bindings::exports::cosmonic::reflect::reflect::Value,
         ) -> std::vec::Vec<u8> {
             crate::serialize(&$codec, mk_val)
         }
@@ -268,7 +272,11 @@ macro_rules! mk_serialize {
         #[allow(dead_code)]
         #[track_caller]
         fn serialize_str(
-            mk_val: impl core::ops::FnOnce(&mut wasmtime::Store<()>, &crate::bindings::exports::cosmonic::serde::reflect::Guest) -> crate::bindings::exports::cosmonic::serde::reflect::Value,
+            mk_val: impl core::ops::FnOnce(
+                                &mut wasmtime::Store<()>,
+                                &crate::bindings::exports::cosmonic::reflect::reflect::Guest,
+                            )
+                                -> crate::bindings::exports::cosmonic::reflect::reflect::Value,
         ) -> String {
             String::from_utf8(serialize(mk_val)).unwrap()
         }
@@ -286,7 +294,7 @@ pub fn deserialize<T>(
     let codec = codec
         .instantiate(&mut store)
         .expect("failed to instantiate codec");
-    let ty = mk_ty(&mut store, codec.cosmonic_serde_reflect());
+    let ty = mk_ty(&mut store, codec.cosmonic_reflect_reflect());
     match codec
         .cosmonic_serde_deserializer()
         .call_from_list(&mut store, payload.as_ref(), ty)
@@ -294,7 +302,7 @@ pub fn deserialize<T>(
     {
         Ok(de) => f(Ok(Value {
             store: &mut store,
-            reflect: codec.cosmonic_serde_reflect(),
+            reflect: codec.cosmonic_reflect_reflect(),
             value: de,
         })),
         Err(err) => {
@@ -316,8 +324,8 @@ macro_rules! mk_deserialize {
             payload: impl core::convert::AsRef<[u8]>,
             mk_ty: impl core::ops::FnOnce(
                 &mut wasmtime::Store<()>,
-                &$crate::bindings::exports::cosmonic::serde::reflect::Guest,
-            ) -> crate::bindings::exports::cosmonic::serde::reflect::Type,
+                &$crate::bindings::exports::cosmonic::reflect::reflect::Guest,
+            ) -> crate::bindings::exports::cosmonic::reflect::reflect::Type,
             f: impl core::ops::FnOnce(core::result::Result<crate::Value<'_>, std::string::String>) -> T,
         ) -> T {
             crate::deserialize(&$codec, payload, mk_ty, f)

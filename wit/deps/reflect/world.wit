@@ -1,0 +1,165 @@
+package cosmonic:reflect@0.1.0;
+
+interface reflect {
+    resource record-type {
+        constructor(fields: list<tuple<string, %type>>);
+    }
+
+    resource variant-type {
+        constructor(cases: list<tuple<string, option<%type>>>);
+    }
+
+    resource list-of-lists-type {
+        constructor(%type: %type);
+    }
+
+    resource tuple-type {
+        constructor(types: list<%type>);
+    }
+
+    resource flags-type {
+        constructor(cases: list<string>);
+    }
+
+    resource enum-type {
+        constructor(cases: list<string>);
+    }
+
+    resource option-type {
+        constructor(%type: %type);
+    }
+
+    resource result-type {
+        constructor(ok: option<%type>, err: option<%type>);
+    }
+
+    variant list-type {
+        %bool,
+        %u8,
+        %s8,
+        %u16,
+        %s16,
+        %u32,
+        %s32,
+        %u64,
+        %s64,
+        %f32,
+        %f64,
+        %char,
+        %string,
+        %record(borrow<record-type>),
+        %variant(borrow<variant-type>),
+        %list(list-of-lists-type), // FIXME: this should use `borrow<list-of-lists>`, but that breaks `wit-bindgen`
+        %tuple(borrow<tuple-type>),
+        %flags(borrow<flags-type>),
+        %enum(borrow<enum-type>),
+        %option(borrow<option-type>),
+        %result(borrow<result-type>),
+     }
+
+    variant %type {
+        %bool,
+        %u8,
+        %s8,
+        %u16,
+        %s16,
+        %u32,
+        %s32,
+        %u64,
+        %s64,
+        %f32,
+        %f64,
+        %char,
+        %string,
+        %record(borrow<record-type>),
+        %variant(borrow<variant-type>),
+        %list(list-type),
+        %tuple(borrow<tuple-type>),
+        %flags(borrow<flags-type>),
+        %enum(borrow<enum-type>),
+        %option(borrow<option-type>),
+        %result(borrow<result-type>),
+    }
+
+    resource record-value {
+        constructor(fields: list<value>);
+        into-value: static func(this: record-value) -> list<value>;
+    }
+
+    resource variant-value {
+        constructor(discriminant: u32, payload: option<value>);
+        into-value: static func(this: variant-value) -> tuple<u32, option<value>>;
+    }
+
+    resource tuple-value {
+        constructor(elements: list<value>);
+        into-value: static func(this: tuple-value) -> list<value>;
+    }
+
+    resource option-value {
+        constructor(value: option<value>);
+        into-value: static func(this: option-value) -> option<value>;
+    }
+
+    resource result-value {
+        constructor(value: result<option<value>, option<value>>);
+        into-value: static func(this: result-value) -> result<option<value>, option<value>>;
+    }
+
+    resource list-of-lists-value {
+        constructor(lists: list<%list>);
+        into-list: static func(this: list-of-lists-value) -> list<%list>;
+    }
+
+    variant %list {
+        %bool(list<bool>),
+        %u8(list<u8>),
+        %s8(list<s8>),
+        %u16(list<u16>),
+        %s16(list<s16>),
+        %u32(list<u32>),
+        %s32(list<s32>),
+        %u64(list<u64>),
+        %s64(list<s64>),
+        %f32(list<f32>),
+        %f64(list<f64>),
+        %char(list<char>),
+        %string(list<string>),
+        %record(list<record-value>),
+        %variant(list<variant-value>),
+        %list(list-of-lists-value),
+        %tuple(list<tuple-value>),
+        %flags(list<u32>),
+        %enum(list<u32>),
+        %option(list<option-value>),
+        %result(list<result-value>),
+    }
+
+    variant value {
+        %bool(bool),
+        %u8(u8),
+        %s8(s8),
+        %u16(u16),
+        %s16(s16),
+        %u32(u32),
+        %s32(s32),
+        %u64(u64),
+        %s64(s64),
+        %f32(f32),
+        %f64(f64),
+        %char(char),
+        %string(string),
+        %record(record-value),
+        %variant(variant-value),
+        %list(%list),
+        %tuple(tuple-value),
+        %flags(u32),
+        %enum(u32),
+        %option(option-value),
+        %result(result-value),
+    }
+}
+
+world imports {
+    import reflect;
+}
