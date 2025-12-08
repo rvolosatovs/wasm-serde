@@ -4,7 +4,9 @@ mod bindings {
     });
 }
 
+use core::array;
 use core::iter::zip;
+use std::collections::HashMap;
 
 use anyhow::{Context as _, anyhow, bail, ensure};
 use wasmtime::component::types;
@@ -92,6 +94,72 @@ fn unwrap_val(
         (reflect::Value::Option(v), Type::Option(ty)) => todo!(),
         #[expect(unused, reason = "incomplete")]
         (reflect::Value::Result(v), Type::Result(ty)) => todo!(),
+        _ => bail!("type mismatch"),
+    }
+}
+
+fn wrap_val(
+    mut store: &mut Store<()>,
+    v: Val,
+    instance: &reflect::Guest,
+    ty: Type,
+) -> wasmtime::Result<reflect::Value> {
+    match (v, ty) {
+        (Val::Bool(v), Type::Bool) => Ok(reflect::Value::Bool(v)),
+        (Val::S8(v), Type::S8) => Ok(reflect::Value::S8(v)),
+        (Val::U8(v), Type::U8) => Ok(reflect::Value::U8(v)),
+        (Val::U16(v), Type::U16) => Ok(reflect::Value::U16(v)),
+        (Val::S16(v), Type::S16) => Ok(reflect::Value::S16(v)),
+        (Val::U32(v), Type::U32) => Ok(reflect::Value::U32(v)),
+        (Val::S32(v), Type::S32) => Ok(reflect::Value::S32(v)),
+        (Val::U64(v), Type::U64) => Ok(reflect::Value::U64(v)),
+        (Val::S64(v), Type::S64) => Ok(reflect::Value::S64(v)),
+        (Val::Float32(v), Type::Float32) => Ok(reflect::Value::F32(v)),
+        (Val::Float64(v), Type::Float64) => Ok(reflect::Value::F64(v)),
+        (Val::Char(v), Type::Char) => Ok(reflect::Value::Char(v)),
+        (Val::String(v), Type::String) => Ok(reflect::Value::String(v)),
+        (Val::Record(fields), Type::Record(ty)) => {
+            let mut fields: HashMap<_, _> = fields.into_iter().collect();
+            let mut values = Vec::with_capacity(fields.len());
+            for types::Field { name, ty } in ty.fields() {
+                let v = fields
+                    .remove(name)
+                    .with_context(|| format!("field `{name}` not found"))?;
+                let v = wrap_val(store, v, instance, ty)
+                    .with_context(|| format!("failed to wrap record field `{name}`"))?;
+                values.push(v);
+            }
+
+            let v = instance
+                .record_value()
+                .call_constructor(&mut store, &values)?;
+            Ok(reflect::Value::Record(v))
+        }
+        #[expect(unused, reason = "incomplete")]
+        (Val::Variant(..), Type::Variant(ty)) => todo!(),
+        #[expect(unused, reason = "incomplete")]
+        (Val::List(v), Type::List(ty)) => todo!(),
+        (Val::Tuple(elems), Type::Tuple(ty)) => {
+            let mut values = Vec::with_capacity(elems.len());
+            for (i, (ty, v)) in zip(ty.types(), elems).enumerate() {
+                let v = wrap_val(store, v, instance, ty)
+                    .with_context(|| format!("failed to wrap tuple element {i}"))?;
+                values.push(v);
+            }
+
+            let v = instance
+                .tuple_value()
+                .call_constructor(&mut store, &values)?;
+            Ok(reflect::Value::Tuple(v))
+        }
+        #[expect(unused, reason = "incomplete")]
+        (Val::Flags(v), Type::Flags(ty)) => todo!(),
+        #[expect(unused, reason = "incomplete")]
+        (Val::Enum(v), Type::Enum(ty)) => todo!(),
+        #[expect(unused, reason = "incomplete")]
+        (Val::Option(v), Type::Option(ty)) => todo!(),
+        #[expect(unused, reason = "incomplete")]
+        (Val::Result(v), Type::Result(ty)) => todo!(),
         _ => bail!("type mismatch"),
     }
 }
@@ -210,11 +278,7 @@ fn deserialize_params(
 
     let values = instance
         .cosmonic_serde_deserializer()
-        .call_from_list(
-            &mut store,
-            payload.as_ref(),
-            reflect::Type::Tuple(reflect_ty),
-        )
+        .call_from_list(&mut store, payload, reflect::Type::Tuple(reflect_ty))
         .and_then(mk_flatten_result(
             &mut store,
             instance.cosmonic_serde_deserializer(),
@@ -235,6 +299,36 @@ fn deserialize_params(
         params.push(v);
     }
     Ok(params)
+}
+
+fn serialize_results(
+    mut store: &mut Store<()>,
+    instance: &bindings::Format,
+    ty: &types::ComponentFunc,
+    results: Vec<Val>,
+) -> wasmtime::Result<Vec<u8>> {
+    let tys = ty.results();
+    let num_results = tys.len();
+    if num_results == 0 {
+        ensure!(results.is_empty());
+        return Ok(Vec::default());
+    }
+
+    let mut values = Vec::with_capacity(results.len());
+    for (i, (ty, v)) in zip(tys, results).enumerate() {
+        let v = wrap_val(store, v, instance.cosmonic_reflect_reflect(), ty)
+            .with_context(|| format!("failed to wrap result {i}"))?;
+        values.push(v);
+    }
+
+    let results = instance
+        .cosmonic_reflect_reflect()
+        .tuple_value()
+        .call_constructor(&mut store, &values)?;
+    let results = instance
+        .cosmonic_serde_serializer()
+        .call_from_value(&mut store, &reflect::Value::Tuple(results))?;
+    Ok(results)
 }
 
 fn get_func(
@@ -277,10 +371,21 @@ fn get_func(
 
 fn main() -> wasmtime::Result<()> {
     let mut args = std::env::args();
-    let (func, payload) = match (args.next(), args.next(), args.next(), args.next()) {
-        (_, Some(func), Some(payload), None) => (func, payload),
-        (Some(exe), ..) => bail!("invalid arguments, usage: {exe} FUNC PAYLOAD"),
-        _ => bail!("invalid arguments, usage: FUNC PAYLOAD"),
+    let args = array::from_fn(|_| args.next());
+    let (func, payload, codec) = match &args {
+        [_, Some(func), Some(payload), Some(codec), None] => (func, payload, codec.as_str()),
+        [_, Some(func), Some(payload), None, None] => (func, payload, "json"),
+        [Some(exe), ..] => bail!("invalid arguments, usage: {exe} FUNC PAYLOAD [CODEC]"),
+        _ => bail!("invalid arguments, usage: FUNC PAYLOAD [CODEC]"),
+    };
+    let codec = match codec {
+        "cbor" => include_bytes!("../target/wasm32-unknown-unknown/release/wasm_serde_cbor.wasm")
+            .as_slice(),
+        "json" => include_bytes!("../target/wasm32-unknown-unknown/release/wasm_serde_json.wasm")
+            .as_slice(),
+        "toml" => include_bytes!("../target/wasm32-unknown-unknown/release/wasm_serde_toml.wasm")
+            .as_slice(),
+        codec => bail!("unknown codec `{codec}`"),
     };
 
     let engine = Engine::default();
@@ -295,16 +400,14 @@ fn main() -> wasmtime::Result<()> {
     let app_ty = linker.substituted_component_type(&app)?;
     let app = linker.instantiate(&mut app_store, &app)?;
 
-    let mut codec = ComponentEncoder::default().module(include_bytes!(
-        "../target/wasm32-unknown-unknown/release/wasm_serde_json.wasm"
-    ))?;
+    let mut codec = ComponentEncoder::default().module(codec)?;
     let codec = codec.encode()?;
     let codec = Component::new(&engine, codec)?;
     let linker = Linker::new(&engine);
     let mut codec_store = Store::new(&engine, ());
     let codec = bindings::Format::instantiate(&mut codec_store, &codec, &linker)?;
 
-    let (f, ty) = get_func(&engine, &mut app_store, app, &app_ty, &func).inspect_err(|err| {
+    let (f, ty) = get_func(&engine, &mut app_store, app, &app_ty, func).inspect_err(|err| {
         eprintln!("exported function `{func}` not found ({err}), perhaps you meant one of:");
         for (name, ty) in app_ty.exports(&engine) {
             match ty {
@@ -328,6 +431,7 @@ fn main() -> wasmtime::Result<()> {
     let mut results = vec![Val::Bool(false); ty.results().len()];
     f.call(&mut app_store, &params, &mut results)
         .context("failed to call function")?;
-    println!("{results:?}");
+    let results = serialize_results(&mut codec_store, &codec, &ty, results)?;
+    println!("{}", String::from_utf8_lossy(&results));
     Ok(())
 }
