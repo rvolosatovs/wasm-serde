@@ -649,7 +649,7 @@ fn record_invalid() {
             let err = de.unwrap_err();
             assert_eq!(
                 err,
-                r#"invalid type: integer `0`, expected record with fields: [("foo", U8), ("bar", String)] at line 1 column 1"#
+                r#"invalid type: integer `0`, expected record with fields: ["foo", "bar"] at line 1 column 1"#
             );
         },
     )

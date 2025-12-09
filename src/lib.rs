@@ -1,6 +1,5 @@
 pub mod bindings;
 
-use core::cell::OnceCell;
 use core::fmt;
 use core::iter::zip;
 use core::ops::Deref;
@@ -84,7 +83,7 @@ impl<T: de::Error + 'static> deserializer::GuestError for Error<T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Type {
     Bool,
     S8,
@@ -180,26 +179,25 @@ impl From<reflect::Type<'_>> for Type {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-#[repr(transparent)]
-pub struct RecordType(Rc<[(String, Type)]>);
-
-impl Deref for RecordType {
-    type Target = Rc<[(String, Type)]>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordType {
+    types: Rc<[Type]>,
+    names: Rc<HashMap<String, usize>>,
 }
 
 impl GuestRecordType for RecordType {
     #[inline]
     fn new(fields: Vec<(String, reflect::Type<'_>)>) -> Self {
-        let fields = fields
-            .into_iter()
-            .map(|(name, ty)| (name, ty.into()))
-            .collect();
-        Self(fields)
+        let mut types = Vec::with_capacity(fields.len());
+        let mut names = HashMap::with_capacity(fields.len());
+        for (i, (name, ty)) in fields.into_iter().enumerate() {
+            types.push(ty.into());
+            names.insert(name, i);
+        }
+        Self {
+            types: Rc::from(types),
+            names: Rc::from(names),
+        }
     }
 }
 
@@ -211,10 +209,7 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
     where
         D: de::Deserializer<'de>,
     {
-        struct RecordFieldVisitor<'a> {
-            ty: &'a RecordType,
-            fields: OnceCell<HashMap<&'a str, (usize, &'a Type)>>,
-        }
+        struct RecordFieldVisitor<'de>(&'de RecordType);
 
         impl<'de> de::DeserializeSeed<'de> for RecordFieldVisitor<'de> {
             type Value = (usize, &'de Type);
@@ -232,7 +227,7 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             type Value = (usize, &'de Type);
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                let expected: Vec<_> = self.ty.iter().map(|(name, ..)| name).collect();
+                let expected: Vec<_> = self.0.names.iter().map(|(name, ..)| name).collect();
                 write!(formatter, "one of `{expected:?}`")
             }
 
@@ -241,10 +236,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             where
                 E: de::Error,
             {
-                let Some((_name, payload)) = self.ty.get(usize::from(v)) else {
+                let Some(ty) = self.0.types.get(usize::from(v)) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v.into()), &self));
                 };
-                Ok((v.into(), payload))
+                Ok((v.into(), ty))
             }
 
             #[inline]
@@ -252,10 +247,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             where
                 E: de::Error,
             {
-                let Some((_name, payload)) = self.ty.get(usize::from(v)) else {
+                let Some(ty) = self.0.types.get(usize::from(v)) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v.into()), &self));
                 };
-                Ok((v.into(), payload))
+                Ok((v.into(), ty))
             }
 
             #[inline]
@@ -263,10 +258,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             where
                 E: de::Error,
             {
-                let Some((_name, payload)) = self.ty.get(v as usize) else {
+                let Some(ty) = self.0.types.get(v as usize) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v.into()), &self));
                 };
-                Ok((v as _, payload))
+                Ok((v as _, ty))
             }
 
             #[inline]
@@ -277,10 +272,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
                 let Ok(i) = usize::try_from(v) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v), &self));
                 };
-                let Some((_name, payload)) = self.ty.get(i) else {
+                let Some(ty) = self.0.types.get(i) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v), &self));
                 };
-                Ok((i, payload))
+                Ok((i, ty))
             }
 
             #[inline]
@@ -288,15 +283,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             where
                 E: de::Error,
             {
-                let fields = self.fields.get_or_init(|| {
-                    zip(0.., self.ty.iter())
-                        .map(|(i, (name, ty))| (name.as_ref(), (i, ty)))
-                        .collect()
-                });
-                let Some((i, ty)) = fields.get(value) else {
+                let Some(i) = self.0.names.get(value) else {
                     return Err(E::invalid_value(de::Unexpected::Str(value), &self));
                 };
-                Ok((*i, ty))
+                Ok((*i, &self.0.types[*i]))
             }
 
             #[inline]
@@ -311,13 +301,14 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             }
         }
 
-        struct RecordVisitor<'a>(&'a RecordType);
+        struct RecordVisitor<'de>(&'de RecordType);
 
         impl<'de> de::Visitor<'de> for RecordVisitor<'de> {
             type Value = reflect::RecordValue;
 
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                write!(f, "record with fields: {:?}", self.0.0)
+                let names = self.0.names.keys().collect::<Vec<_>>();
+                write!(f, "record with fields: {names:?}")
             }
 
             #[inline]
@@ -325,8 +316,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             where
                 A: de::SeqAccess<'de>,
             {
-                let mut fields = Vec::with_capacity(self.0.len());
-                for (_, ty) in self.0.iter() {
+                let mut fields = Vec::with_capacity(self.0.types.len());
+                for ty in self.0.types.iter() {
                     let Some(v) = seq.next_element_seed(ty)? else {
                         return Err(A::Error::invalid_length(fields.len(), &self));
                     };
@@ -340,11 +331,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             where
                 A: de::MapAccess<'de>,
             {
-                let mut fields = Vec::with_capacity(self.0.len());
-                while let Some((i, ty)) = map.next_key_seed(RecordFieldVisitor {
-                    ty: self.0,
-                    fields: OnceCell::default(),
-                })? {
+                let mut fields = Vec::with_capacity(self.0.types.len());
+                while let Some((i, ty)) = map.next_key_seed(RecordFieldVisitor(self.0))? {
                     let v = map.next_value_seed(ty)?;
                     if fields.len() == i {
                         fields.push(v);
@@ -364,7 +352,7 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct VariantType(Rc<[(String, Option<Type>)]>);
 
@@ -606,7 +594,7 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct ListType(Type);
 
@@ -739,7 +727,7 @@ impl From<reflect::ListType<'_>> for ListType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct TupleType(Rc<[Type]>);
 
@@ -1083,7 +1071,7 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct OptionType(Type);
 
@@ -1150,7 +1138,7 @@ impl<'de> de::DeserializeSeed<'de> for &'de OptionType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResultType {
     ok: Option<Type>,
     err: Option<Type>,

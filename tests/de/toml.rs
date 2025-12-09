@@ -620,7 +620,7 @@ fn record_invalid() {
             let err = de.unwrap_err();
             assert_eq!(
                 err,
-                r#"invalid type: integer `0`, expected record with fields: [("foo", U8), ("bar", String)]
+                r#"invalid type: integer `0`, expected record with fields: ["foo", "bar"]
 "#
             );
         },
