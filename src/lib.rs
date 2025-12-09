@@ -4,6 +4,7 @@ use core::cell::OnceCell;
 use core::fmt;
 use core::iter::zip;
 use core::ops::Deref;
+use core::str;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -303,12 +304,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             where
                 E: de::Error,
             {
-                for (i, (name, ty)) in zip(0.., self.ty.as_ref()) {
-                    if value == name.as_bytes() {
-                        return Ok((i, ty));
-                    }
-                }
-                Err(E::invalid_value(de::Unexpected::Bytes(value), &self))
+                let Ok(s) = str::from_utf8(value) else {
+                    return Err(E::invalid_value(de::Unexpected::Bytes(value), &self));
+                };
+                self.visit_str(s)
             }
         }
 
@@ -344,7 +343,7 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
                 let mut fields = Vec::with_capacity(self.0.len());
                 while let Some((i, ty)) = map.next_key_seed(RecordFieldVisitor {
                     ty: self.0,
-                    fields: OnceCell::new(),
+                    fields: OnceCell::default(),
                 })? {
                     let v = map.next_value_seed(ty)?;
                     if fields.len() == i {
@@ -651,7 +650,11 @@ impl<'de> de::DeserializeSeed<'de> for &'de ListType {
             where
                 A: de::SeqAccess<'de>,
             {
-                let mut values = Vec::default();
+                let mut values = if let Some(size) = seq.size_hint() {
+                    Vec::with_capacity(size)
+                } else {
+                    Vec::default()
+                };
                 while let Some(v) = seq.next_element_seed(self.0)? {
                     values.push(v)
                 }
