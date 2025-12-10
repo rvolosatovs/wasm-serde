@@ -470,12 +470,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                for (c, (name, payload)) in zip(0.., self.0.as_ref()) {
-                    if value == name.as_bytes() {
-                        return Ok((c, payload));
-                    }
-                }
-                Err(E::invalid_value(de::Unexpected::Bytes(value), &self))
+                let Ok(s) = str::from_utf8(value) else {
+                    return Err(E::invalid_value(de::Unexpected::Bytes(value), &self));
+                };
+                self.visit_str(s)
             }
         }
 
@@ -981,12 +979,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
             where
                 E: de::Error,
             {
-                for (c, name) in zip(0.., self.0.as_ref()) {
-                    if value == name.as_bytes() {
-                        return Ok(c);
-                    }
-                }
-                Err(E::invalid_value(de::Unexpected::Bytes(value), &self))
+                let Ok(s) = str::from_utf8(value) else {
+                    return Err(E::invalid_value(de::Unexpected::Bytes(value), &self));
+                };
+                self.visit_str(s)
             }
         }
 
