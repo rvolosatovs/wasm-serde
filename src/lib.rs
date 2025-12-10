@@ -283,10 +283,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
             where
                 E: de::Error,
             {
-                let Some(i) = self.0.names.get(value) else {
+                let Some(&i) = self.0.names.get(value) else {
                     return Err(E::invalid_value(de::Unexpected::Str(value), &self));
                 };
-                Ok((*i, &self.0.types[*i]))
+                Ok((i, &self.0.types[i]))
             }
 
             #[inline]
@@ -869,12 +869,12 @@ impl<'de> de::DeserializeSeed<'de> for &'de FlagsType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
-pub struct EnumType(Rc<[String]>);
+pub struct EnumType(Rc<HashMap<String, usize>>);
 
 impl Deref for EnumType {
-    type Target = Rc<[String]>;
+    type Target = Rc<HashMap<String, usize>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -884,8 +884,11 @@ impl Deref for EnumType {
 impl GuestEnumType for EnumType {
     #[inline]
     fn new(cases: Vec<String>) -> Self {
-        let cases = cases.into();
-        Self(cases)
+        let mut names = HashMap::with_capacity(cases.len());
+        for (i, name) in cases.into_iter().enumerate() {
+            names.insert(name, i);
+        }
+        Self(Rc::from(names))
     }
 }
 
@@ -915,7 +918,11 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
             type Value = u32;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                write!(formatter, "one of `{:?}`", self.0.0)
+                let mut expected = vec![""; self.0.0.len()];
+                for (name, &i) in self.0.0.iter() {
+                    expected[i] = name;
+                }
+                write!(formatter, "one of `{expected:?}`")
             }
 
             #[inline]
@@ -923,9 +930,9 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
             where
                 E: de::Error,
             {
-                let Some(_name) = self.0.get(usize::from(v)) else {
+                if usize::from(v) >= self.0.0.len() {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v.into()), &self));
-                };
+                }
                 Ok(v.into())
             }
 
@@ -934,9 +941,9 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
             where
                 E: de::Error,
             {
-                let Some(_name) = self.0.get(usize::from(v)) else {
+                if usize::from(v) >= self.0.0.len() {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v.into()), &self));
-                };
+                }
                 Ok(v.into())
             }
 
@@ -945,9 +952,9 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
             where
                 E: de::Error,
             {
-                let Some(_name) = self.0.get(v as usize) else {
+                if v as usize >= self.0.0.len() {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v.into()), &self));
-                };
+                }
                 Ok(v)
             }
 
@@ -959,9 +966,9 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
                 let Ok(c) = usize::try_from(v) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v), &self));
                 };
-                let Some(_name) = self.0.get(c) else {
+                if c >= self.0.0.len() {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v), &self));
-                };
+                }
                 Ok(c as _)
             }
 
@@ -970,12 +977,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
             where
                 E: de::Error,
             {
-                for (c, name) in zip(0.., self.0.as_ref()) {
-                    if value == name {
-                        return Ok(c);
-                    }
-                }
-                Err(E::invalid_value(de::Unexpected::Str(value), &self))
+                let Some(&c) = self.0.0.get(value) else {
+                    return Err(E::invalid_value(de::Unexpected::Str(value), &self));
+                };
+                Ok(c as _)
             }
 
             #[inline]
@@ -996,7 +1001,11 @@ impl<'de> de::DeserializeSeed<'de> for &'de EnumType {
             type Value = u32;
 
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                write!(f, "enum with cases: {:?}", self.0.0)
+                let mut cases = vec![""; self.0.0.len()];
+                for (name, &i) in self.0.0.iter() {
+                    cases[i] = name;
+                }
+                write!(f, "enum with cases: {cases:?}")
             }
 
             #[inline]
