@@ -353,25 +353,24 @@ impl<'de> de::DeserializeSeed<'de> for &'de RecordType {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct VariantType(Rc<[(String, Option<Type>)]>);
-
-impl Deref for VariantType {
-    type Target = Rc<[(String, Option<Type>)]>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub struct VariantType {
+    types: Rc<[Option<Type>]>,
+    names: Rc<HashMap<String, usize>>,
 }
 
 impl GuestVariantType for VariantType {
     #[inline]
     fn new(cases: Vec<(String, Option<reflect::Type<'_>>)>) -> Self {
-        let cases = cases
-            .into_iter()
-            .map(|(name, ty)| (name, ty.map(Into::into)))
-            .collect();
-        Self(cases)
+        let mut types = Vec::with_capacity(cases.len());
+        let mut names = HashMap::with_capacity(cases.len());
+        for (i, (name, ty)) in cases.into_iter().enumerate() {
+            types.push(ty.map(Into::into));
+            names.insert(name, i);
+        }
+        Self {
+            types: Rc::from(types),
+            names: Rc::from(names),
+        }
     }
 }
 
@@ -401,7 +400,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             type Value = (u32, &'de Option<Type>);
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                let expected: Vec<_> = self.0.iter().map(|(k, _)| k).collect();
+                let mut expected = vec![""; self.0.names.len()];
+                for (name, &i) in self.0.names.iter() {
+                    expected[i] = name;
+                }
                 write!(formatter, "one of `{expected:?}`")
             }
 
@@ -410,10 +412,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                let Some((_name, payload)) = self.0.get(usize::from(v)) else {
+                let Some(ty) = self.0.types.get(usize::from(v)) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v.into()), &self));
                 };
-                Ok((v.into(), payload))
+                Ok((v.into(), ty))
             }
 
             #[inline]
@@ -421,10 +423,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                let Some((_name, payload)) = self.0.get(usize::from(v)) else {
+                let Some(ty) = self.0.types.get(usize::from(v)) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v.into()), &self));
                 };
-                Ok((v.into(), payload))
+                Ok((v.into(), ty))
             }
 
             #[inline]
@@ -432,10 +434,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                let Some((_name, payload)) = self.0.get(v as usize) else {
+                let Some(ty) = self.0.types.get(v as usize) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v.into()), &self));
                 };
-                Ok((v, payload))
+                Ok((v, ty))
             }
 
             #[inline]
@@ -446,10 +448,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
                 let Ok(c) = usize::try_from(v) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v), &self));
                 };
-                let Some((_name, payload)) = self.0.get(c) else {
+                let Some(ty) = self.0.types.get(c) else {
                     return Err(E::invalid_value(de::Unexpected::Unsigned(v), &self));
                 };
-                Ok((c as _, payload))
+                Ok((c as _, ty))
             }
 
             #[inline]
@@ -457,12 +459,11 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                for (c, (name, payload)) in zip(0.., self.0.as_ref()) {
-                    if value == name {
-                        return Ok((c, payload));
-                    }
-                }
-                Err(E::invalid_value(de::Unexpected::Str(value), &self))
+                let Some(&c) = self.0.names.get(value) else {
+                    return Err(E::invalid_value(de::Unexpected::Str(value), &self));
+                };
+                debug_assert!(c < self.0.types.len());
+                Ok((c as u32, &self.0.types[c]))
             }
 
             #[inline]
@@ -483,7 +484,11 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             type Value = reflect::VariantValue;
 
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                write!(f, "variant with cases: {:?}", self.0.0)
+                let mut cases = vec![""; self.0.names.len()];
+                for (name, &i) in self.0.names.iter() {
+                    cases[i] = name;
+                }
+                write!(f, "variant with cases: {cases:?}")
             }
 
             #[inline]
@@ -491,8 +496,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                let (c, payload) = VariantDiscriminantVisitor(self.0).visit_u8(v)?;
-                if payload.is_some() {
+                let (c, ty) = VariantDiscriminantVisitor(self.0).visit_u8(v)?;
+                if ty.is_some() {
                     return Err(E::custom("missing payload"));
                 }
                 Ok(Self::Value::new(VariantValue(c, None)))
@@ -503,8 +508,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                let (c, payload) = VariantDiscriminantVisitor(self.0).visit_u16(v)?;
-                if payload.is_some() {
+                let (c, ty) = VariantDiscriminantVisitor(self.0).visit_u16(v)?;
+                if ty.is_some() {
                     return Err(E::custom("missing payload"));
                 }
                 Ok(Self::Value::new(VariantValue(c, None)))
@@ -515,8 +520,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                let (c, payload) = VariantDiscriminantVisitor(self.0).visit_u32(v)?;
-                if payload.is_some() {
+                let (c, ty) = VariantDiscriminantVisitor(self.0).visit_u32(v)?;
+                if ty.is_some() {
                     return Err(E::custom("missing payload"));
                 }
                 Ok(Self::Value::new(VariantValue(c, None)))
@@ -527,8 +532,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                let (c, payload) = VariantDiscriminantVisitor(self.0).visit_u64(v)?;
-                if payload.is_some() {
+                let (c, ty) = VariantDiscriminantVisitor(self.0).visit_u64(v)?;
+                if ty.is_some() {
                     return Err(E::custom("missing payload"));
                 }
                 Ok(Self::Value::new(VariantValue(c, None)))
@@ -539,8 +544,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 E: de::Error,
             {
-                let (c, payload) = VariantDiscriminantVisitor(self.0).visit_str(v)?;
-                if payload.is_some() {
+                let (c, ty) = VariantDiscriminantVisitor(self.0).visit_str(v)?;
+                if ty.is_some() {
                     return Err(E::custom("missing payload"));
                 }
                 Ok(Self::Value::new(VariantValue(c, None)))
@@ -551,11 +556,10 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 A: de::MapAccess<'de>,
             {
-                let Some((c, payload)) = map.next_key_seed(VariantDiscriminantVisitor(self.0))?
-                else {
+                let Some((c, ty)) = map.next_key_seed(VariantDiscriminantVisitor(self.0))? else {
                     return Err(A::Error::custom("the object must have exactly one field"));
                 };
-                let v = if let Some(ty) = payload {
+                let v = if let Some(ty) = ty {
                     let v = map.next_value_seed(ty)?;
                     Some(v)
                 } else {
@@ -576,8 +580,8 @@ impl<'de> de::DeserializeSeed<'de> for &'de VariantType {
             where
                 A: de::EnumAccess<'de>,
             {
-                let ((c, payload), v) = data.variant_seed(VariantDiscriminantVisitor(self.0))?;
-                let v = if let Some(ty) = payload {
+                let ((c, ty), v) = data.variant_seed(VariantDiscriminantVisitor(self.0))?;
+                let v = if let Some(ty) = ty {
                     let v = v.newtype_variant_seed(ty)?;
                     Some(v)
                 } else {
